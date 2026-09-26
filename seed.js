@@ -3,6 +3,13 @@ const mongoose = require('mongoose');
 const Movie = require('./models/Movie');
 const User = require('./models/User');
 
+if (!process.env.MONGODB_URI) {
+  console.error(
+    'Missing MONGODB_URI. Copy server/.env.example to server/.env and update the value.',
+  );
+  process.exit(1);
+}
+
 const movies = [
   {
     title: 'Dune: Part Three',

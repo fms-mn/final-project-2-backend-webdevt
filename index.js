@@ -3,6 +3,19 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
 
+const requiredEnvironmentVariables = ['MONGODB_URI', 'JWT_SECRET'];
+const missingEnvironmentVariables = requiredEnvironmentVariables.filter(
+  (name) => !process.env[name],
+);
+
+if (missingEnvironmentVariables.length > 0) {
+  console.error(
+    `Missing required environment variable(s): ${missingEnvironmentVariables.join(', ')}.\n` +
+      'Copy server/.env.example to server/.env and update the values.',
+  );
+  process.exit(1);
+}
+
 const authRoutes = require('./routes/auth');
 const movieRoutes = require('./routes/movies');
 const bookingRoutes = require('./routes/bookings');
@@ -36,4 +49,5 @@ mongoose
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
+    process.exit(1);
   });
