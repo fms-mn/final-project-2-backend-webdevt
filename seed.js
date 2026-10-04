@@ -108,40 +108,35 @@ const seedDB = async () => {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB');
 
-    // Clear existing data
-    await Movie.deleteMany({});
-    await User.deleteMany({});
-    console.log('Cleared existing data');
+    let addedMovies = 0;
+    for (const movie of movies) {
+      const result = await Movie.updateOne(
+        { title: movie.title },
+        { $setOnInsert: movie },
+        { upsert: true },
+      );
+      addedMovies += result.upsertedCount;
+    }
+    console.log(`Added ${addedMovies} missing sample movies`);
 
-    // Seed movies
-    await Movie.insertMany(movies);
-    console.log(`Seeded ${movies.length} movies`);
-
-    // Create admin user
-    const admin = new User({
-      name: 'Admin',
-      email: 'admin@cinemax.com',
-      password: 'admin123',
-      role: 'admin',
-    });
-    await admin.save();
-    console.log('Created admin user (admin@cinemax.com / admin123)');
-
-    // Create test user
-    const user = new User({
-      name: 'John Doe',
-      email: 'john@example.com',
-      password: 'password123',
-      role: 'user',
-    });
-    await user.save();
-    console.log('Created test user (john@example.com / password123)');
-
-    await mongoose.connection.close();
+    const sampleUsers = [
+      { name: 'Admin', email: 'admin@cinemax.com', password: 'admin123', role: 'admin' },
+      { name: 'John Doe', email: 'john@example.com', password: 'password123', role: 'user' },
+    ];
+    let addedUsers = 0;
+    for (const sampleUser of sampleUsers) {
+      if (!await User.exists({ email: sampleUser.email })) {
+        await new User(sampleUser).save();
+        addedUsers += 1;
+      }
+    }
+    console.log(`Added ${addedUsers} missing sample users`);
     console.log('Database seeded successfully!');
   } catch (error) {
     console.error('Seed error:', error);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    await mongoose.disconnect();
   }
 };
 
