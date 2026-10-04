@@ -260,8 +260,11 @@ async function main() {
     await check('GET /movies lists it; ?status= and ?search= filter', async () => {
       const all = await api('GET', '/movies');
       assert(all.data.some((m) => m._id === movie._id), 'new movie missing from list');
-      const searched = await api('GET', `/movies?search=${encodeURIComponent('[SMOKE] crud')}`);
-      assert(searched.data.length >= 1 && searched.data.every((m) => /smoke/i.test(m.title)), 'search filter wrong');
+      // plain-text term: the API treats ?search= as a regular expression, so avoid [ ] ( ) etc.
+      const searched = await api('GET', `/movies?search=${encodeURIComponent(`crud ${RUN_ID}`)}`);
+      expectStatus(searched, 200, 'search');
+      assert(searched.data.some((m) => m._id === movie._id), 'search did not find the new movie');
+      assert(searched.data.every((m) => /crud/i.test(m.title)), 'search returned unrelated movies');
       const coming = await api('GET', '/movies?status=coming_soon');
       assert(coming.data.every((m) => m.status === 'coming_soon'), 'status filter wrong');
     });
