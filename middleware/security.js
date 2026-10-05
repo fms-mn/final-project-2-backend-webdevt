@@ -31,4 +31,15 @@ function originCheck(req, res, next) {
   return next(new HttpError(403, 'Origin not allowed'));
 }
 
-module.exports = { corsMiddleware, originCheck, UNSAFE_METHODS };
+// Baseline response headers for the API and the website.
+function securityHeaders(req, res, next) {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Only over HTTPS (req.secure needs TRUST_PROXY behind a reverse proxy): tell browsers to
+  // keep using HTTPS for this site.
+  if (req.secure) res.set('Strict-Transport-Security', 'max-age=15552000');
+  next();
+}
+
+module.exports = { corsMiddleware, originCheck, securityHeaders, UNSAFE_METHODS };
