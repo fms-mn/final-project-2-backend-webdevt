@@ -393,6 +393,9 @@ test('admin: movie writes need an admin session and a CSRF token', async () => {
     assert.equal((await call(method, path, { body: {}, session: user })).status, 403, `${method} user`);
     assert.equal((await call(method, path, { body: {}, session: { cookie: admin.cookie } })).status, 403, `${method} admin without csrf`);
   }
+  // The full list (drafts included) is admin-only; it is not shadowed by GET /api/movies/:id.
+  assert.equal((await call('GET', '/api/movies/manage/all')).status, 401, 'full list anonymous');
+  assert.equal((await call('GET', '/api/movies/manage/all', { session: user })).status, 403, 'full list user');
 });
 
 // ---- bookings placeholder, errors ----------------------------------------------------------
