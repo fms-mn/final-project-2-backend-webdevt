@@ -1,6 +1,4 @@
-const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
 require('dotenv').config();
 
 const requiredEnvironmentVariables = ['MONGODB_URI', 'JWT_SECRET'];
@@ -16,25 +14,21 @@ if (missingEnvironmentVariables.length > 0) {
   process.exit(1);
 }
 
-const authRoutes = require('./routes/auth');
-const movieRoutes = require('./routes/movies');
-const bookingRoutes = require('./routes/bookings');
+// Sessions are signed with this secret, so a guessable one lets anyone forge a login.
+const weakSecret =
+  process.env.JWT_SECRET.length < 32 || process.env.JWT_SECRET.includes('replace-this');
+if (weakSecret) {
+  const advice = 'JWT_SECRET is short or still the example value. Use a long random string (32+ characters).';
+  if (process.env.NODE_ENV === 'production') {
+    console.error(`${advice} Refusing to start in production.`);
+    process.exit(1);
+  }
+  console.warn(`WARNING: ${advice}`);
+}
 
-const app = express();
+const { createApp } = require('./app');
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/movies', movieRoutes);
-app.use('/api/bookings', bookingRoutes);
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'CineMax API is running' });
-});
+const app = createApp();
 
 // Connect to MongoDB and start server
 const PORT = process.env.PORT || 5000;

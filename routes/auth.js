@@ -1,98 +1,92 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const config = require('../config');
 const User = require('../models/User');
-const { auth } = require('../middleware/auth');
+const { startSession, endSession } = require('../middleware/auth');
+const { createRateLimiter } = require('../middleware/rateLimit');
+const { HttpError, wrap } = require('../utils/http');
 
 const router = express.Router();
 
-const publicUser = (user) => ({
-  id: user._id,
-  name: user.name,
-  email: user.email,
-  role: user.role,
-  phone: user.phone,
-});
+// Failed sign-ins are limited per IP + email, and per IP overall.
+const limits = { windowMs: config.loginRateWindowMs };
+const failuresByEmail = createRateLimiter({ ...limits, max: config.loginRateMax });
+const failuresByIp = createRateLimiter({ ...limits, max: config.loginRateMax * 5 });
 
-const signToken = (user) => jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-  expiresIn: '7d',
-});
+// Compared against when the email is unknown, so a wrong email and a wrong password take
+// about as long and cannot be told apart by timing.
+let dummyHash;
+const unknownUserCompare = async (password) => {
+  dummyHash = dummyHash || await bcrypt.hash('not-a-real-password', 12);
+  await bcrypt.compare(password, dummyHash);
+};
 
 // Register
-router.post('/register', async (req, res) => {
-  try {
-    const { name, email, password, phone } = req.body;
+router.post('/register', wrap(async (req, res) => {
+  const { name, email, password, phone } = req.body || {};
 
-    // Reject non-strings so a request body cannot smuggle query operators into the lookup.
-    if (typeof name !== 'string' || typeof email !== 'string') {
-      return res.status(400).json({ message: 'Name, email and password are required' });
-    }
-    if (phone !== undefined && typeof phone !== 'string') {
-      return res.status(400).json({ message: 'Phone must be text' });
-    }
-    const passwordError = User.validatePassword(password);
-    if (passwordError) {
-      return res.status(400).json({ message: passwordError });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: 'Email already registered' });
-    }
-
-    // Public registration always creates a regular user, whatever role the request names.
-    const user = new User({
-      name,
-      email,
-      phone,
-      passwordHash: await User.hashPassword(password),
-      role: 'user',
-    });
-    await user.save();
-
-    res.status(201).json({ token: signToken(user), user: publicUser(user) });
-  } catch (error) {
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({ message: error.message });
-    }
-    if (error.code === 11000) {
-      return res.status(400).json({ message: 'Email already registered' });
-    }
-    res.status(500).json({ message: 'Server error', error: error.message });
+  // Reject non-strings so a request body cannot smuggle query operators into the lookup.
+  if (typeof name !== 'string' || typeof email !== 'string') {
+    throw new HttpError(400, 'Name, email and password are required');
   }
-});
+  if (phone !== undefined && phone !== null && typeof phone !== 'string') {
+    throw new HttpError(400, 'Phone must be text');
+  }
+  const passwordError = User.validatePassword(password);
+  if (passwordError) throw new HttpError(400, passwordError);
+
+  if (await User.findOne({ email: email.trim().toLowerCase() })) {
+    throw new HttpError(409, 'Email already registered');
+  }
+
+  // Public registration always creates a regular user, whatever role the request names.
+  const user = new User({
+    name,
+    email,
+    phone: phone || undefined,
+    passwordHash: await User.hashPassword(password),
+    role: 'user',
+  });
+  try {
+    await user.save();
+  } catch (error) {
+    if (error.code === 11000) throw new HttpError(409, 'Email already registered');
+    throw error;
+  }
+
+  const csrfToken = startSession(res, user);
+  res.status(201).json({ user, csrfToken });
+}));
 
 // Login
-router.post('/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (typeof email !== 'string' || typeof password !== 'string') {
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
-
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
-
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
-
-    if (!user.isActive) {
-      return res.status(403).json({ message: 'Account is deactivated' });
-    }
-
-    res.json({ token: signToken(user), user: publicUser(user) });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+router.post('/login', wrap(async (req, res) => {
+  const { email, password } = req.body || {};
+  if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
+    throw new HttpError(400, 'Email and password are required');
   }
-});
 
-// Get current user
-router.get('/me', auth, async (req, res) => {
-  res.json({ user: req.user });
+  const emailKey = `${req.ip}|${email.trim().toLowerCase()}`;
+  failuresByIp.check(req.ip);
+  failuresByEmail.check(emailKey);
+
+  const user = await User.findOne({ email: email.trim().toLowerCase() });
+  const matches = user ? await user.comparePassword(password) : await unknownUserCompare(password);
+  if (!user || !matches) {
+    failuresByIp.fail(req.ip);
+    failuresByEmail.fail(emailKey);
+    throw new HttpError(401, 'Invalid email or password');
+  }
+  if (!user.isActive) throw new HttpError(403, 'Account is deactivated');
+
+  failuresByEmail.clear(emailKey);
+  const csrfToken = startSession(res, user);
+  res.json({ user, csrfToken });
+}));
+
+// Logout: always clears the cookie, even when the session has already expired.
+router.post('/logout', (req, res) => {
+  endSession(res);
+  res.json({ message: 'Logged out' });
 });
 
 module.exports = router;
