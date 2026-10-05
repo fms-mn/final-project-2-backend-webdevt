@@ -1,6 +1,8 @@
 // Runtime settings read from environment variables (see server/.env.example).
 // Read once when the module is first required, so load dotenv before requiring this file.
 
+const path = require('path');
+
 const isProduction = process.env.NODE_ENV === 'production';
 
 const positiveNumber = (value, fallback) => {
@@ -22,6 +24,10 @@ const sessionHours = positiveNumber(process.env.SESSION_HOURS, 2);
 
 module.exports = {
   isProduction,
+
+  // The built React app (npm run build). When it exists, the server serves it, so the website
+  // and the API share one origin, as the proposal's deployment plan describes.
+  clientDist: process.env.CLIENT_DIST || path.join(__dirname, '..', 'client', 'dist'),
 
   // Session cookie. Short-lived on purpose: there is no refresh token, so users sign in again.
   cookieName: 'filme_session',

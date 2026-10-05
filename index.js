@@ -26,6 +26,15 @@ if (weakSecret) {
   console.warn(`WARNING: ${advice}`);
 }
 
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.TRUST_PROXY) {
+    console.warn(
+      'WARNING: TRUST_PROXY is not set. Behind a host such as Render or Railway set TRUST_PROXY=1, '
+      + 'otherwise every visitor looks like the same IP (login rate limits) and HTTPS is not detected.',
+    );
+  }
+}
+
 const { createApp } = require('./app');
 
 const app = createApp();
