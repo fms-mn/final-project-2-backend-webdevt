@@ -55,19 +55,33 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-async function api(method, route, { token, body } = {}) {
+const SESSION_COOKIE = 'filme_session';
+
+// A "session" is { cookie, csrf }: the cookie the browser would keep and the CSRF token the
+// app would send back in the X-CSRF-Token header on writes.
+async function api(method, route, { session, body, headers = {} } = {}) {
   const response = await fetch(`${BASE}${route}`, {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(session && session.cookie ? { Cookie: session.cookie } : {}),
+      ...(session && session.csrf ? { 'X-CSRF-Token': session.csrf } : {}),
+      ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
   let data = null;
   try { data = await response.json(); } catch { /* empty body */ }
-  return { status: response.status, data };
+  const setCookies = typeof response.headers.getSetCookie === 'function'
+    ? response.headers.getSetCookie()
+    : [response.headers.get('set-cookie')].filter(Boolean);
+  return { status: response.status, data, headers: response.headers, setCookies };
 }
+
+const sessionFrom = (res) => ({
+  cookie: res.setCookies.map((c) => c.split(';')[0]).find((c) => c.startsWith(`${SESSION_COOKIE}=`)),
+  csrf: res.data && res.data.csrfToken,
+});
 
 function expectStatus(res, status, label = '') {
   assert(res.status === status, `${label} expected HTTP ${status}, got ${res.status} ${JSON.stringify(res.data)}`.trim());
@@ -268,17 +282,19 @@ async function main() {
     });
 
     // ---- Users and authentication -------------------------------------------------------------
-    card('User model and authentication');
-    let tokenA = null;
-    let tokenB = null;
-    await check('register creates a regular user and never returns a password or hash', async () => {
+    card('User model and registration');
+    let sessionA = null;
+    let sessionB = null;
+    await check('register creates a regular user, starts an HttpOnly session cookie, and returns no password, hash or token', async () => {
       const res = await api('POST', '/auth/register', { body: { ...USER_A, phone: '09171234567' } });
       expectStatus(res, 201);
-      assert(res.data.token, 'no token returned');
       assert(res.data.user.role === 'user', `role was ${res.data.user.role}`);
+      assert(res.data.csrfToken, 'no CSRF token returned');
       const text = JSON.stringify(res.data);
-      assert(!text.includes(PASSWORD) && !/passwordHash|"password"/.test(text), 'password data leaked in response');
-      tokenA = res.data.token;
+      assert(!text.includes(PASSWORD) && !/passwordHash|"password"|"token"/.test(text), 'secret data leaked in response');
+      const cookie = res.setCookies.find((c) => c.startsWith(`${SESSION_COOKIE}=`));
+      assert(cookie && /HttpOnly/i.test(cookie), `session cookie missing or not HttpOnly: ${cookie}`);
+      sessionA = sessionFrom(res);
     });
     await check('the stored record has a bcrypt hash, keeps the phone as text, and is active', async () => {
       const stored = await User.findOne({ email: USER_A.email }).lean();
@@ -291,12 +307,12 @@ async function main() {
       const res = await api('POST', '/auth/register', { body: { ...USER_B, email: USER_B.email.toUpperCase() } });
       expectStatus(res, 201);
       assert(res.data.user.email === USER_B.email, `stored as ${res.data.user.email}`);
-      tokenB = res.data.token;
+      sessionB = sessionFrom(res);
     });
-    await check('duplicate email is rejected', async () => {
-      expect4xx(await api('POST', '/auth/register', { body: USER_A }));
+    await check('a duplicate email is a 409 conflict', async () => {
+      expectStatus(await api('POST', '/auth/register', { body: USER_A }), 409);
     });
-    await check('passwords shorter than 8 characters are rejected', async () => {
+    await check('passwords shorter than 8 characters are a 400', async () => {
       expectStatus(await api('POST', '/auth/register', {
         body: { name: 'Short', email: email('short'), password: '1234567' },
       }), 400);
@@ -308,27 +324,69 @@ async function main() {
       expectStatus(res, 201);
       assert(res.data.user.role === 'user', `role was ${res.data.user.role}`);
     });
-    await check('login works; wrong password and unknown email are rejected', async () => {
+
+    card('Login, logout and sessions');
+    await check('login works and starts a session cookie plus a CSRF token', async () => {
       const ok = await api('POST', '/auth/login', { body: { email: USER_A.email, password: PASSWORD } });
       expectStatus(ok, 200);
-      assert(ok.data.token && ok.data.user.email === USER_A.email, 'bad login payload');
-      expect4xx(await api('POST', '/auth/login', { body: { email: USER_A.email, password: 'wrong-password' } }));
-      expect4xx(await api('POST', '/auth/login', { body: { email: 'nobody@test.local', password: PASSWORD } }));
+      assert(ok.data.user.email === USER_A.email && ok.data.csrfToken, 'bad login payload');
+      assert(sessionFrom(ok).cookie, 'no session cookie');
+      sessionA = sessionFrom(ok);
     });
-    await check('GET /auth/me returns the logged-in user without password data', async () => {
-      const res = await api('GET', '/auth/me', { token: tokenA });
+    await check('a wrong password and an unknown email are both 401 with the same message', async () => {
+      const wrong = await api('POST', '/auth/login', { body: { email: USER_A.email, password: 'wrong-password' } });
+      const unknown = await api('POST', '/auth/login', { body: { email: 'nobody@test.local', password: PASSWORD } });
+      expectStatus(wrong, 401);
+      expectStatus(unknown, 401);
+      assert(wrong.data.message === unknown.data.message, 'the messages differ, which reveals which emails exist');
+    });
+    await check('GET /users/me returns the user and CSRF token, without password data', async () => {
+      const res = await api('GET', '/users/me', { session: sessionA });
       expectStatus(res, 200);
       assert(res.data.user.email === USER_A.email, 'wrong user returned');
+      assert(res.data.csrfToken === sessionA.csrf, 'CSRF token does not match the one from login');
       assert(!/passwordHash|"password"/.test(JSON.stringify(res.data)), 'password data present');
     });
-    await check('deactivated accounts lose access, including with an existing token', async () => {
+    await check('logout clears the session cookie', async () => {
+      const res = await api('POST', '/auth/logout', { session: sessionA });
+      expectStatus(res, 200);
+      const cleared = res.setCookies.find((c) => c.startsWith(`${SESSION_COOKIE}=`));
+      assert(cleared && /Expires=Thu, 01 Jan 1970|Max-Age=0/i.test(cleared), `cookie was not cleared: ${cleared}`);
+    });
+    await check('deactivated accounts lose access, including with an existing session', async () => {
       await User.updateOne({ email: USER_B.email }, { isActive: false });
-      expectStatus(await api('GET', '/auth/me', { token: tokenB }), 403, 'existing token');
+      expectStatus(await api('GET', '/users/me', { session: sessionB }), 403, 'existing session');
       expectStatus(await api('POST', '/auth/login', { body: { email: USER_B.email, password: PASSWORD } }), 403, 'login');
     });
 
+    card('CSRF and origin protection');
+    await check('writes without the CSRF token are refused; with it they work', async () => {
+      const body = { name: 'Smoke A Renamed' };
+      expectStatus(await api('PATCH', '/users/me', { body, session: { cookie: sessionA.cookie } }), 403, 'no token');
+      expectStatus(await api('PATCH', '/users/me', { body, session: { cookie: sessionA.cookie, csrf: 'wrong' } }), 403, 'wrong token');
+      expectStatus(await api('PATCH', '/users/me', { body, session: sessionA }), 200, 'right token');
+    });
+    await check('a write from an unlisted origin is refused', async () => {
+      expectStatus(await api('POST', '/auth/login', {
+        body: { email: USER_A.email, password: PASSWORD },
+        headers: { Origin: 'https://evil.example' },
+      }), 403);
+    });
+    await check('profile updates change only name and phone, never the role', async () => {
+      const res = await api('PATCH', '/users/me', {
+        session: sessionA,
+        body: { name: 'Smoke A', phone: '0999', role: 'admin', isActive: false, email: 'x@y.z' },
+      });
+      expectStatus(res, 200);
+      const stored = await User.findOne({ email: USER_A.email });
+      assert(stored.name === 'Smoke A' && stored.phone === '0999', 'name/phone not updated');
+      assert(stored.role === 'user' && stored.isActive === true, 'role or status was changed through the profile');
+      assert(stored.email === USER_A.email, 'email was changed through the profile');
+      expectStatus(await api('PATCH', '/users/me', { session: sessionA, body: {} }), 400, 'empty update');
+    });
+
     card('Initial admin setup script');
-    let adminToken = null;
+    let adminSession = null;
     await check('create-admin makes an administrator from environment variables', async () => {
       const env = { ...process.env, ADMIN_NAME: ADMIN.name, ADMIN_EMAIL: ADMIN.email, ADMIN_PASSWORD: ADMIN.password };
       const run = runNode([script('scripts/create-admin.js')], { env });
@@ -348,45 +406,84 @@ async function main() {
       const res = await api('POST', '/auth/login', { body: { email: ADMIN.email, password: ADMIN.password } });
       expectStatus(res, 200);
       assert(res.data.user.role === 'admin', `role was ${res.data.user.role}`);
-      adminToken = res.data.token;
+      adminSession = sessionFrom(res);
     });
-    if (!adminToken) return;
+    if (!adminSession) return;
 
-    // ---- JWT middleware -----------------------------------------------------------------------
-    card('JWT middleware protects private routes');
-    await check('no token -> 401 on /auth/me, /bookings, /bookings/my', async () => {
-      expectStatus(await api('GET', '/auth/me'), 401, '/auth/me');
+    card('Admin account management');
+    const storedA = await User.findOne({ email: USER_A.email });
+    const storedAdmin = await User.findOne({ email: ADMIN.email });
+    await check('GET /users is admin-only and lists accounts without hashes', async () => {
+      expectStatus(await api('GET', '/users'), 401, 'anonymous');
+      expectStatus(await api('GET', '/users', { session: sessionA }), 403, 'regular user');
+      const res = await api('GET', '/users?limit=200', { session: adminSession });
+      expectStatus(res, 200);
+      assert(res.data.users.some((u) => u.email === USER_A.email), 'smoke user missing from the list');
+      assert(Number.isInteger(res.data.total), 'no total in the response');
+      assert(!/passwordHash/.test(JSON.stringify(res.data)), 'password hashes in the list');
+    });
+    await check('an admin can deactivate and reactivate a regular user', async () => {
+      const off = await api('PATCH', `/users/${storedA._id}/status`, { session: adminSession, body: { isActive: false } });
+      expectStatus(off, 200);
+      assert(off.data.user.isActive === false, 'user still active');
+      expectStatus(await api('GET', '/users/me', { session: sessionA }), 403, 'their session after deactivation');
+      expectStatus(await api('PATCH', `/users/${storedA._id}/status`, { session: adminSession, body: { isActive: true } }), 200);
+      expectStatus(await api('GET', '/users/me', { session: sessionA }), 200, 'their session after reactivation');
+    });
+    await check('a regular user cannot change account status; admins cannot be deactivated', async () => {
+      expectStatus(await api('PATCH', `/users/${storedA._id}/status`, { session: sessionA, body: { isActive: false } }), 403, 'regular user');
+      expectStatus(await api('PATCH', `/users/${storedAdmin._id}/status`, { session: adminSession, body: { isActive: false } }), 403, 'admin target');
+      expectStatus(await api('PATCH', `/users/${storedA._id}/status`, { session: adminSession, body: { isActive: 'no' } }), 400, 'non-boolean');
+      expectStatus(await api('PATCH', '/users/not-an-id/status', { session: adminSession, body: { isActive: false } }), 404, 'bad id');
+      const still = await User.findOne({ email: ADMIN.email });
+      assert(still.isActive === true, 'the admin was deactivated');
+    });
+
+    // ---- Route protection ----------------------------------------------------------------------
+    card('Role and access protection');
+    await check('no session -> 401 on /users/me, /users, /bookings, /bookings/my', async () => {
+      expectStatus(await api('GET', '/users/me'), 401, '/users/me');
+      expectStatus(await api('GET', '/users'), 401, '/users');
       expectStatus(await api('POST', '/bookings', { body: {} }), 401, 'POST /bookings');
       expectStatus(await api('GET', '/bookings/my'), 401, '/bookings/my');
     });
-    await check('invalid token -> 401', async () => {
-      expectStatus(await api('GET', '/auth/me', { token: 'not.a.token' }), 401);
+    await check('an invalid or forged cookie -> 401', async () => {
+      expectStatus(await api('GET', '/users/me', { session: { cookie: `${SESSION_COOKIE}=not.a.token` } }), 401);
+    });
+    await check('a Bearer header is not accepted as a session', async () => {
+      expectStatus(await api('GET', '/users/me', { headers: { Authorization: 'Bearer abc.def.ghi' } }), 401);
     });
     await check('normal user -> 403 on admin movie routes', async () => {
-      expectStatus(await api('POST', '/movies', { token: tokenA, body: testMovie('forbidden') }), 403, 'POST');
-      expectStatus(await api('PUT', '/movies/000000000000000000000000', { token: tokenA, body: {} }), 403, 'PUT');
-      expectStatus(await api('DELETE', '/movies/000000000000000000000000', { token: tokenA }), 403, 'DELETE');
+      expectStatus(await api('POST', '/movies', { session: sessionA, body: testMovie('forbidden') }), 403, 'POST');
+      expectStatus(await api('PUT', '/movies/000000000000000000000000', { session: sessionA, body: {} }), 403, 'PUT');
+      expectStatus(await api('DELETE', '/movies/000000000000000000000000', { session: sessionA }), 403, 'DELETE');
     });
-    await check('no token -> 401 on admin movie routes', async () => {
-      expectStatus(await api('POST', '/movies', { body: testMovie('anon') }), 401);
+    await check('no session -> 401, and an admin without the CSRF token -> 403, on admin movie routes', async () => {
+      expectStatus(await api('POST', '/movies', { body: testMovie('anon') }), 401, 'anonymous');
+      expectStatus(await api('POST', '/movies', { session: { cookie: adminSession.cookie }, body: testMovie('nocsrf') }), 403, 'no csrf');
+    });
+    await check('unknown API routes and bad JSON use the standard error shape', async () => {
+      const missing = await api('GET', '/does-not-exist');
+      expectStatus(missing, 404);
+      assert(typeof missing.data.message === 'string', 'no message in the 404 body');
     });
 
     // ---- Movies -------------------------------------------------------------------------------
     card('Movie model and routes');
     let movie = null;
     await check('creating a movie without required fields is rejected', async () => {
-      const res = await api('POST', '/movies', { token: adminToken, body: { title: 'Incomplete' } });
+      const res = await api('POST', '/movies', { session: adminSession, body: { title: 'Incomplete' } });
       expectStatus(res, 400);
     });
     await check('invalid values are rejected (status, duration, poster URL)', async () => {
       for (const bad of [{ status: 'now_showing' }, { duration: 0 }, { posterUrl: 'javascript:alert(1)' }]) {
-        const res = await api('POST', '/movies', { token: adminToken, body: testMovie('invalid', bad) });
+        const res = await api('POST', '/movies', { session: adminSession, body: testMovie('invalid', bad) });
         expectStatus(res, 400, JSON.stringify(bad));
       }
     });
     await check('admin can create a movie; it starts as a draft; unknown fields are ignored', async () => {
       const res = await api('POST', '/movies', {
-        token: adminToken,
+        session: adminSession,
         body: { ...testMovie('crud'), isFeatured: true, _id: '000000000000000000000001' },
       });
       expectStatus(res, 201);
@@ -403,7 +500,7 @@ async function main() {
       expectStatus(await api('GET', `/movies/${movie._id}`), 404);
     });
     await check('publishing makes it visible; search and genre filter find it', async () => {
-      const updated = await api('PUT', `/movies/${movie._id}`, { token: adminToken, body: { status: 'published' } });
+      const updated = await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { status: 'published' } });
       expectStatus(updated, 200);
       const found = await api('GET', `/movies/${movie._id}`);
       expectStatus(found, 200);
@@ -425,14 +522,14 @@ async function main() {
       assert(Array.isArray(res.data), 'response is not a list');
     });
     await check('updates are validated; unknown and malformed ids give 404', async () => {
-      expectStatus(await api('PUT', `/movies/${movie._id}`, { token: adminToken, body: { duration: 0 } }), 400);
-      expectStatus(await api('PUT', `/movies/${movie._id}`, { token: adminToken, body: { status: 'now_showing' } }), 400);
-      expectStatus(await api('PUT', `/movies/${movie._id}`, { token: adminToken, body: { duration: 101 } }), 200);
+      expectStatus(await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { duration: 0 } }), 400);
+      expectStatus(await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { status: 'now_showing' } }), 400);
+      expectStatus(await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { duration: 101 } }), 200);
       expectStatus(await api('GET', '/movies/000000000000000000000000'), 404);
       expectStatus(await api('GET', '/movies/not-an-id'), 404);
     });
     await check('admin can delete a movie; it is gone afterwards', async () => {
-      expectStatus(await api('DELETE', `/movies/${movie._id}`, { token: adminToken }), 200);
+      expectStatus(await api('DELETE', `/movies/${movie._id}`, { session: adminSession }), 200);
       expectStatus(await api('GET', `/movies/${movie._id}`), 404);
     });
 
@@ -542,8 +639,31 @@ async function main() {
 
     card('Bookings API (being rebuilt)');
     await check('booking routes answer 501 until the booking engine is built', async () => {
-      expectStatus(await api('GET', '/bookings/my', { token: tokenA }), 501);
-      expectStatus(await api('POST', '/bookings', { token: tokenA, body: {} }), 501);
+      expectStatus(await api('GET', '/bookings/my', { session: sessionA }), 501);
+      expectStatus(await api('POST', '/bookings', { session: sessionA, body: {} }), 501);
+    });
+
+    // Last on purpose: it deliberately fails many logins for one made-up email.
+    card('Login rate limiting');
+    await check('repeated failed logins are blocked with a 429 and a Retry-After header', async () => {
+      const limit = Number(process.env.LOGIN_RATE_MAX) || 10;
+      const target = { email: email('ratelimit'), password: 'wrong-password' };
+      let blockedAt = null;
+      let retryAfter = null;
+      for (let attempt = 1; attempt <= limit + 3; attempt += 1) {
+        const res = await api('POST', '/auth/login', { body: target });
+        if (res.status === 429) {
+          blockedAt = attempt;
+          retryAfter = res.headers.get('retry-after');
+          break;
+        }
+        expectStatus(res, 401, `attempt ${attempt}`);
+      }
+      assert(blockedAt === limit + 1, `blocked at attempt ${blockedAt}, expected attempt ${limit + 1}`);
+      assert(Number(retryAfter) > 0, `Retry-After header was ${retryAfter}`);
+    });
+    await check('being blocked for one email does not block other accounts', async () => {
+      expectStatus(await api('POST', '/auth/login', { body: { email: USER_A.email, password: PASSWORD } }), 200);
     });
   } finally {
     await stopServer();
