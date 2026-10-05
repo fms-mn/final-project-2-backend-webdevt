@@ -11,15 +11,23 @@
  *   npm run seed
  *   npm run create-admin
  *
- * It deletes ONLY these collections: users, movies, auditoriums, showtimes, bookings and
- * seatclaims. The preview command deletes nothing, and it refuses when NODE_ENV=production.
+ * It deletes ONLY the collections of this app's six models: users, movies, auditoria, showtimes,
+ * bookings and seatclaims. The preview command deletes nothing, and it refuses when NODE_ENV=production.
  * Never run it against a database that holds data you want to keep.
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const mongoose = require('mongoose');
+const User = require('../models/User');
+const Movie = require('../models/Movie');
+const Auditorium = require('../models/Auditorium');
+const Showtime = require('../models/Showtime');
+const Booking = require('../models/Booking');
+const SeatClaim = require('../models/SeatClaim');
 
-const COLLECTIONS = ['users', 'movies', 'auditoriums', 'showtimes', 'bookings', 'seatclaims'];
+// Taken from the models so the names always match what Mongoose really uses
+// (for example Auditorium is stored in "auditoria").
+const COLLECTIONS = [User, Movie, Auditorium, Showtime, Booking, SeatClaim].map((Model) => Model.collection.name);
 
 async function main() {
   if (process.env.NODE_ENV === 'production') {
