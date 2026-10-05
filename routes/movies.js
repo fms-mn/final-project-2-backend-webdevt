@@ -43,6 +43,11 @@ router.get('/', wrap(async (req, res) => {
   res.json(await Movie.find(filter).sort({ createdAt: -1 }));
 }));
 
+// Every movie including drafts and archived ones (admin only). Registered before /:id.
+router.get('/manage/all', adminAuth, wrap(async (req, res) => {
+  res.json(await Movie.find().sort({ createdAt: -1 }));
+}));
+
 // Get single published movie (public)
 router.get('/:id', wrap(async (req, res) => {
   requireValidId(req.params.id);
