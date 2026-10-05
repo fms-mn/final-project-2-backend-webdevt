@@ -10,10 +10,15 @@ const auth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-password');
+    const user = await User.findById(decoded.id).select('-passwordHash');
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
+    }
+
+    // Checked on every request, so deactivating an account also cuts off tokens already issued.
+    if (!user.isActive) {
+      return res.status(403).json({ message: 'Account is deactivated' });
     }
 
     req.user = user;

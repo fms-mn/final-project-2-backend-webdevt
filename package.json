@@ -10,7 +10,12 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "seed": "node seed.js",
-    "smoke": "node scripts/smoke-test.js"
+    "smoke": "node scripts/smoke.js",
+    "init-indexes": "node scripts/init-indexes.js",
+    "create-admin": "node scripts/create-admin.js",
+    "db:reset": "node scripts/reset-dev-db.js",
+    "test": "node --test",
+    "db:reset:confirm": "node scripts/reset-dev-db.js --yes"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

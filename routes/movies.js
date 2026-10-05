@@ -1,18 +1,40 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Movie = require('../models/Movie');
-const { auth, adminAuth } = require('../middleware/auth');
+const { adminAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Get all movies (public)
+// Only these fields may be set through the API.
+const EDITABLE_FIELDS = [
+  'title',
+  'synopsis',
+  'genre',
+  'rating',
+  'posterUrl',
+  'duration',
+  'releaseDate',
+  'status',
+];
+
+const pickEditable = (body = {}) => Object.fromEntries(
+  EDITABLE_FIELDS.filter((field) => body[field] !== undefined).map((field) => [field, body[field]]),
+);
+
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Get published movies (public)
 router.get('/', async (req, res) => {
   try {
-    const { status, genre, search } = req.query;
-    const filter = {};
+    const { genre, search } = req.query;
+    const filter = { status: 'published' };
 
-    if (status) filter.status = status;
-    if (genre) filter.genre = { $in: [genre] };
-    if (search) filter.title = { $regex: search, $options: 'i' };
+    if (typeof genre === 'string' && genre) {
+      filter.genre = { $regex: `^${escapeRegex(genre)}$`, $options: 'i' };
+    }
+    if (typeof search === 'string' && search) {
+      filter.title = { $regex: escapeRegex(search), $options: 'i' };
+    }
 
     const movies = await Movie.find(filter).sort({ createdAt: -1 });
     res.json(movies);
@@ -21,10 +43,13 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get single movie (public)
+// Get single published movie (public)
 router.get('/:id', async (req, res) => {
   try {
-    const movie = await Movie.findById(req.params.id);
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ message: 'Movie not found' });
+    }
+    const movie = await Movie.findOne({ _id: req.params.id, status: 'published' });
     if (!movie) {
       return res.status(404).json({ message: 'Movie not found' });
     }
@@ -37,10 +62,13 @@ router.get('/:id', async (req, res) => {
 // Create movie (admin only)
 router.post('/', adminAuth, async (req, res) => {
   try {
-    const movie = new Movie(req.body);
+    const movie = new Movie(pickEditable(req.body));
     await movie.save();
     res.status(201).json(movie);
   } catch (error) {
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: error.message });
+    }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -48,7 +76,10 @@ router.post('/', adminAuth, async (req, res) => {
 // Update movie (admin only)
 router.put('/:id', adminAuth, async (req, res) => {
   try {
-    const movie = await Movie.findByIdAndUpdate(req.params.id, req.body, {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ message: 'Movie not found' });
+    }
+    const movie = await Movie.findByIdAndUpdate(req.params.id, pickEditable(req.body), {
       new: true,
       runValidators: true,
     });
@@ -57,6 +88,9 @@ router.put('/:id', adminAuth, async (req, res) => {
     }
     res.json(movie);
   } catch (error) {
+    if (error.name === 'ValidationError' || error.name === 'CastError') {
+      return res.status(400).json({ message: error.message });
+    }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -64,6 +98,9 @@ router.put('/:id', adminAuth, async (req, res) => {
 // Delete movie (admin only)
 router.delete('/:id', adminAuth, async (req, res) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ message: 'Movie not found' });
+    }
     const movie = await Movie.findByIdAndDelete(req.params.id);
     if (!movie) {
       return res.status(404).json({ message: 'Movie not found' });
