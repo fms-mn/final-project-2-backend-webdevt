@@ -1,7 +1,6 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const Movie = require('./models/Movie');
-const User = require('./models/User');
 
 if (!process.env.MONGODB_URI) {
   console.error(
@@ -119,18 +118,6 @@ const seedDB = async () => {
     }
     console.log(`Added ${addedMovies} missing sample movies`);
 
-    const sampleUsers = [
-      { name: 'Admin', email: 'admin@cinemax.com', password: 'admin123', role: 'admin' },
-      { name: 'John Doe', email: 'john@example.com', password: 'password123', role: 'user' },
-    ];
-    let addedUsers = 0;
-    for (const sampleUser of sampleUsers) {
-      if (!await User.exists({ email: sampleUser.email })) {
-        await new User(sampleUser).save();
-        addedUsers += 1;
-      }
-    }
-    console.log(`Added ${addedUsers} missing sample users`);
     console.log('Database seeded successfully!');
   } catch (error) {
     console.error('Seed error:', error);

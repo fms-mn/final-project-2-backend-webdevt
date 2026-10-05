@@ -25,7 +25,7 @@ const RUN_ID = Date.now();
 const PASSWORD = 'smoke-pass-123';
 const USER_A = { name: 'Smoke A', email: `smoke-a-${RUN_ID}@test.local`, password: PASSWORD };
 const USER_B = { name: 'Smoke B', email: `smoke-b-${RUN_ID}@test.local`, password: PASSWORD };
-const ADMIN = { email: 'admin@cinemax.com', password: 'admin123' };
+const ADMIN = { name: 'Smoke Admin', email: `smoke-admin-${RUN_ID}@test.local`, password: PASSWORD, role: 'admin' };
 
 const results = [];
 let currentCard = '';
@@ -117,7 +117,6 @@ async function main() {
     const run = runNode([path.join(SERVER_DIR, 'seed.js')]);
     assert(run.status === 0, `exit ${run.status}: ${run.stderr || run.stdout}`);
     assert(/Added 0 missing sample movies/.test(run.stdout), `second run output: ${run.stdout}`);
-    assert(/Added 0 missing sample users/.test(run.stdout), `second run output: ${run.stdout}`);
   });
 
   // ---- Card: Express server starts / MongoDB connects --------------------------------------
@@ -209,7 +208,12 @@ async function main() {
       assert(res.data.user.email === USER_A.email, 'wrong user returned');
       assert(!('password' in res.data.user), 'password field present');
     });
-    await check('seeded admin can log in', async () => {
+    await check('temporary admin can log in', async () => {
+      const mongoose = require('mongoose');
+      const User = require('../models/User');
+      await mongoose.connect(process.env.MONGODB_URI);
+      try { await new User(ADMIN).save(); }
+      finally { await mongoose.disconnect(); }
       const res = await api('POST', '/auth/login', { body: ADMIN });
       expectStatus(res, 200);
       assert(res.data.user.role === 'admin', `role was ${res.data.user.role}`);
@@ -357,7 +361,7 @@ async function cleanup() {
   const Movie = require('../models/Movie');
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    const users = await User.find({ email: new RegExp(`^smoke-[abc]-${RUN_ID}@test\\.local$`) }, '_id');
+    const users = await User.find({ email: new RegExp(`^smoke-(?:[abc]|admin)-${RUN_ID}@test\\.local$`) }, '_id');
     const ids = users.map((u) => u._id);
     await Booking.deleteMany({ user: { $in: ids } });
     await User.deleteMany({ _id: { $in: ids } });
