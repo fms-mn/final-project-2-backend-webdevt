@@ -1,0 +1,141 @@
+// A tiny in-memory stand-in for MongoDB, used by the offline tests. It patches the real Mongoose
+// models, so schema validation, defaults and pre-validate hooks (seat label generation, price
+// and time checks) still run for real. Only the query features the routes use are implemented:
+// equality, $in, $ne, $gt, $gte, $lt, $lte, $regex, sort, skip, limit, select, session.
+const test = require('node:test');
+const mongoose = require('mongoose');
+
+const idOf = (value) => String(value?._id ?? value);
+const asNumber = (value) => (value instanceof Date ? value.getTime() : Number(value));
+const same = (a, b) => (
+  (a instanceof Date || b instanceof Date) ? asNumber(a) === asNumber(b) : idOf(a) === idOf(b)
+);
+
+function matchesCondition(value, condition) {
+  const isOperators = condition && typeof condition === 'object' && !(condition instanceof Date)
+    && !Array.isArray(condition) && Object.keys(condition).some((key) => key.startsWith('$'));
+  if (!isOperators) return same(value, condition);
+  return Object.entries(condition).every(([operator, operand]) => {
+    switch (operator) {
+      case '$in': return operand.some((item) => same(value, item));
+      case '$ne': return !same(value, operand);
+      case '$gt': return asNumber(value) > asNumber(operand);
+      case '$gte': return asNumber(value) >= asNumber(operand);
+      case '$lt': return asNumber(value) < asNumber(operand);
+      case '$lte': return asNumber(value) <= asNumber(operand);
+      case '$regex': return new RegExp(operand, condition.$options).test(String(value));
+      case '$options': return true;
+      default: throw new Error(`fakeDb does not support ${operator}`);
+    }
+  });
+}
+
+const matches = (doc, filter = {}) => Object.entries(filter).every(
+  ([key, condition]) => matchesCondition(doc[key], condition),
+);
+
+function query(getRows, { single = false, shape, many = false } = {}) {
+  let sortSpec = null;
+  let skipBy = 0;
+  let limitTo = Infinity;
+  const run = () => {
+    let rows = getRows().slice();
+    if (sortSpec) {
+      const [[field, direction]] = Object.entries(sortSpec);
+      rows.sort((a, b) => (asNumber(a[field]) - asNumber(b[field])) * (direction < 0 ? -1 : 1));
+    }
+    rows = rows.slice(skipBy, skipBy + limitTo);
+    if (single) return rows[0] ? (shape ? shape(rows[0]) : rows[0]) : null;
+    return many && shape ? rows.map(shape) : rows;
+  };
+  const q = {
+    sort(spec) { sortSpec = spec; return q; },
+    skip(n) { skipBy = n; return q; },
+    limit(n) { limitTo = n; return q; },
+    select() { return q; },
+    session() { return q; },
+    then: (resolve, reject) => Promise.resolve().then(run).then(resolve, reject),
+  };
+  return q;
+}
+
+// Patches `Model` so it reads and writes `rows` (an array this function keeps in sync).
+function fakeModel(Model, rows, { uniqueOn } = {}) {
+  // Reads hand out copies, as a real database does: changing a copy (even a rejected change)
+  // never touches the stored data until save() succeeds.
+  const view = (doc) => {
+    const copy = Model.hydrate(doc.toObject());
+    copy.$__row = doc;
+    return copy;
+  };
+  const find = (filter) => query(() => rows.filter((doc) => matches(doc, filter)), { shape: view, many: true });
+  const findOne = (filter) => query(() => rows.filter((doc) => matches(doc, filter)), { single: true, shape: view });
+  test.mock.method(Model, 'find', find);
+  test.mock.method(Model, 'findOne', findOne);
+  test.mock.method(Model, 'findById', (id) => findOne({ _id: id }));
+  test.mock.method(Model, 'exists', (filter) => query(
+    () => rows.filter((doc) => matches(doc, filter)),
+    { single: true, shape: (doc) => ({ _id: doc._id }) },
+  ));
+  test.mock.method(Model, 'countDocuments', async (filter) => rows.filter((doc) => matches(doc, filter)).length);
+  const remove = async (filter) => {
+    const keep = rows.filter((doc) => !matches(doc, filter));
+    const deleted = rows.length - keep.length;
+    rows.splice(0, rows.length, ...keep);
+    return { deletedCount: deleted };
+  };
+  test.mock.method(Model, 'deleteOne', async (filter) => {
+    const index = rows.findIndex((doc) => matches(doc, filter));
+    if (index >= 0) rows.splice(index, 1);
+    return { deletedCount: index >= 0 ? 1 : 0 };
+  });
+  test.mock.method(Model, 'deleteMany', remove);
+  const apply = (doc, update) => {
+    for (const [field, amount] of Object.entries(update.$inc || {})) doc[field] = (doc[field] || 0) + amount;
+    for (const [field, value] of Object.entries(update.$set || {})) doc[field] = value;
+  };
+  test.mock.method(Model, 'updateOne', async (filter, update) => {
+    const doc = rows.find((item) => matches(item, filter));
+    if (doc) apply(doc, update);
+    return { modifiedCount: doc ? 1 : 0 };
+  });
+  test.mock.method(Model, 'updateMany', async (filter, update) => {
+    const found = rows.filter((doc) => matches(doc, filter));
+    found.forEach((doc) => apply(doc, update));
+    return { modifiedCount: found.length };
+  });
+  test.mock.method(Model.prototype, 'save', async function save() {
+    await this.validate();
+    if (this.$__row) { // an update: copy the saved copy back onto the stored document
+      this.$__row.set(this.toObject());
+      return this;
+    }
+    if (!rows.includes(this)) {
+      if (uniqueOn && rows.some((doc) => doc[uniqueOn] === this[uniqueOn])) {
+        throw Object.assign(new Error('duplicate key'), { code: 11000 });
+      }
+      rows.push(this);
+    }
+    this.$isNew = false;
+    return this;
+  });
+}
+
+// Replaces mongoose.startSession. `beforeAttempt(attempt)` can change the data and return true
+// to make that attempt fail with a transient transaction error, like a real write conflict:
+// the callback is then run again from scratch, exactly as the MongoDB driver does.
+function fakeTransactions({ beforeAttempt } = {}) {
+  test.mock.method(mongoose, 'startSession', async () => ({
+    async withTransaction(work) {
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        if (beforeAttempt && beforeAttempt(attempt)) continue;
+        await work();
+        return;
+      }
+      throw new Error('too many transaction retries');
+    },
+    async endSession() {},
+  }));
+}
+
+module.exports = { fakeModel, fakeTransactions, matches };

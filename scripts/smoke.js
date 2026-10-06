@@ -454,13 +454,13 @@ async function main() {
       expectStatus(await api('GET', '/users/me', { headers: { Authorization: 'Bearer abc.def.ghi' } }), 401);
     });
     await check('normal user -> 403 on admin movie routes', async () => {
-      expectStatus(await api('POST', '/movies', { session: sessionA, body: testMovie('forbidden') }), 403, 'POST');
-      expectStatus(await api('PUT', '/movies/000000000000000000000000', { session: sessionA, body: {} }), 403, 'PUT');
+      expectStatus(await api('POST', '/admin/movies', { session: sessionA, body: testMovie('forbidden') }), 403, 'POST');
+      expectStatus(await api('PATCH', '/admin/movies/000000000000000000000000', { session: sessionA, body: {} }), 403, 'PUT');
       expectStatus(await api('DELETE', '/movies/000000000000000000000000', { session: sessionA }), 403, 'DELETE');
     });
     await check('no session -> 401, and an admin without the CSRF token -> 403, on admin movie routes', async () => {
-      expectStatus(await api('POST', '/movies', { body: testMovie('anon') }), 401, 'anonymous');
-      expectStatus(await api('POST', '/movies', { session: { cookie: adminSession.cookie }, body: testMovie('nocsrf') }), 403, 'no csrf');
+      expectStatus(await api('POST', '/admin/movies', { body: testMovie('anon') }), 401, 'anonymous');
+      expectStatus(await api('POST', '/admin/movies', { session: { cookie: adminSession.cookie }, body: testMovie('nocsrf') }), 403, 'no csrf');
     });
     await check('unknown API routes and bad JSON use the standard error shape', async () => {
       const missing = await api('GET', '/does-not-exist');
@@ -472,17 +472,17 @@ async function main() {
     card('Movie model and routes');
     let movie = null;
     await check('creating a movie without required fields is rejected', async () => {
-      const res = await api('POST', '/movies', { session: adminSession, body: { title: 'Incomplete' } });
+      const res = await api('POST', '/admin/movies', { session: adminSession, body: { title: 'Incomplete' } });
       expectStatus(res, 400);
     });
     await check('invalid values are rejected (status, duration, poster URL)', async () => {
       for (const bad of [{ status: 'now_showing' }, { duration: 0 }, { posterUrl: 'javascript:alert(1)' }]) {
-        const res = await api('POST', '/movies', { session: adminSession, body: testMovie('invalid', bad) });
+        const res = await api('POST', '/admin/movies', { session: adminSession, body: testMovie('invalid', bad) });
         expectStatus(res, 400, JSON.stringify(bad));
       }
     });
     await check('admin can create a movie; it starts as a draft; unknown fields are ignored', async () => {
-      const res = await api('POST', '/movies', {
+      const res = await api('POST', '/admin/movies', {
         session: adminSession,
         body: { ...testMovie('crud'), isFeatured: true, _id: '000000000000000000000001' },
       });
@@ -500,7 +500,7 @@ async function main() {
       expectStatus(await api('GET', `/movies/${movie._id}`), 404);
     });
     await check('publishing makes it visible; search and genre filter find it', async () => {
-      const updated = await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { status: 'published' } });
+      const updated = await api('PATCH', `/admin/movies/${movie._id}`, { session: adminSession, body: { status: 'published' } });
       expectStatus(updated, 200);
       const found = await api('GET', `/movies/${movie._id}`);
       expectStatus(found, 200);
@@ -514,7 +514,12 @@ async function main() {
       const list = await api('GET', '/movies');
       expectStatus(list, 200);
       assert(list.data.length > 0, 'no published movies in the list');
-      assert(list.data.every((m) => m.status === 'published'), 'a non-published movie is in the public list');
+      const everything = await api('GET', '/admin/movies', { session: adminSession });
+      expectStatus(everything, 200);
+      const hidden = new Set(everything.data.filter((m) => m.status !== 'published').map((m) => m._id));
+      assert(hidden.size > 0, 'expected at least one draft or archived movie to check against');
+      assert(list.data.every((m) => !hidden.has(m._id)), 'a non-published movie is in the public list');
+      assert(list.data.every((m) => !('status' in m) && !('createdAt' in m)), 'the public list leaks internal fields');
     });
     await check('search text is not treated as a regular expression', async () => {
       const res = await api('GET', `/movies?search=${encodeURIComponent('(')}`);
@@ -522,15 +527,135 @@ async function main() {
       assert(Array.isArray(res.data), 'response is not a list');
     });
     await check('updates are validated; unknown and malformed ids give 404', async () => {
-      expectStatus(await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { duration: 0 } }), 400);
-      expectStatus(await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { status: 'now_showing' } }), 400);
-      expectStatus(await api('PUT', `/movies/${movie._id}`, { session: adminSession, body: { duration: 101 } }), 200);
+      expectStatus(await api('PATCH', `/admin/movies/${movie._id}`, { session: adminSession, body: { duration: 0 } }), 400);
+      expectStatus(await api('PATCH', `/admin/movies/${movie._id}`, { session: adminSession, body: { status: 'now_showing' } }), 400);
+      expectStatus(await api('PATCH', `/admin/movies/${movie._id}`, { session: adminSession, body: { duration: 101 } }), 200);
       expectStatus(await api('GET', '/movies/000000000000000000000000'), 404);
       expectStatus(await api('GET', '/movies/not-an-id'), 404);
     });
     await check('admin can delete a movie; it is gone afterwards', async () => {
       expectStatus(await api('DELETE', `/movies/${movie._id}`, { session: adminSession }), 200);
       expectStatus(await api('GET', `/movies/${movie._id}`), 404);
+    });
+
+    // ---- Catalog, auditoriums and showtimes (backend list 3) -------------------------------------
+    card('Auditorium and showtime APIs');
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const iso = (offsetMs) => new Date(Date.now() + offsetMs).toISOString();
+    let film = null;
+    let hall = null;
+    let slot = null;
+    let reservation = null;
+    await check('admin creates a published movie and an auditorium; the server makes the seat labels', async () => {
+      const movieRes = await api('POST', '/admin/movies', {
+        session: adminSession, body: testMovie('showtimes', { status: 'published' }),
+      });
+      expectStatus(movieRes, 201);
+      film = movieRes.data;
+      const hallRes = await api('POST', '/auditoriums', {
+        session: adminSession,
+        body: { name: `SMOKE room ${RUN_ID}`, rows: 3, seatsPerRow: 4, seatLabels: ['HACK1'] },
+      });
+      expectStatus(hallRes, 201);
+      hall = hallRes.data;
+      assert(hall.seatLabels.length === 12 && hall.seatLabels[0] === 'A1' && hall.seatLabels[11] === 'C4', `labels: ${hall.seatLabels}`);
+      expectStatus(await api('POST', '/auditoriums', {
+        session: adminSession, body: { name: `SMOKE room ${RUN_ID}`, rows: 1, seatsPerRow: 1 },
+      }), 409, 'duplicate name');
+      expectStatus(await api('GET', '/auditoriums', { session: sessionA }), 403, 'customer');
+    });
+    if (!film || !hall) return;
+    await check('a showtime gets its end time from the movie; past times and bad prices are refused', async () => {
+      const startTime = iso(3 * DAY_MS);
+      const res = await api('POST', '/showtimes', {
+        session: adminSession, body: { movie: film._id, auditorium: hall._id, startTime, ticketPrice: 40000 },
+      });
+      expectStatus(res, 201);
+      slot = res.data;
+      assert(new Date(slot.endTime) - new Date(slot.startTime) === 100 * 60 * 1000, 'endTime is not start + 100 minutes');
+      const bad = { movie: film._id, auditorium: hall._id, startTime: iso(4 * DAY_MS), ticketPrice: 40000 };
+      expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...bad, startTime: iso(-DAY_MS) } }), 400, 'past');
+      expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...bad, ticketPrice: 400.5 } }), 400, 'fraction');
+      expectStatus(await api('POST', '/showtimes', { session: sessionA, body: bad }), 403, 'customer');
+    });
+    if (!slot) return;
+    await check('overlapping showtimes are 409; back-to-back is allowed', async () => {
+      const same = { movie: film._id, auditorium: hall._id, ticketPrice: 40000 };
+      expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...same, startTime: slot.startTime } }), 409, 'identical');
+      expectStatus(await api('POST', '/showtimes', {
+        session: adminSession, body: { ...same, startTime: new Date(new Date(slot.startTime).getTime() + 30 * 60 * 1000).toISOString() },
+      }), 409, 'starts inside');
+      expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...same, startTime: slot.endTime } }), 201, 'back to back');
+    });
+    await check('five admins creating the same slot at once: exactly one wins, the rest get 409', async () => {
+      const body = { movie: film._id, auditorium: hall._id, startTime: iso(6 * DAY_MS), ticketPrice: 40000 };
+      const answers = await Promise.all(Array.from({ length: 5 }, () => api('POST', '/showtimes', { session: adminSession, body })));
+      const codes = answers.map((r) => r.status).sort();
+      assert(codes.filter((c) => c === 201).length === 1 && codes.filter((c) => c === 409).length === 4, `statuses: ${codes}`);
+      const inDb = await Showtime.countDocuments({ auditorium: hall._id, startTime: new Date(body.startTime) });
+      assert(inDb === 1, `${inDb} showtimes stored for that slot`);
+    });
+    await check('seat availability is the layout minus the seat claims', async () => {
+      const before = await api('GET', `/showtimes/${slot._id}/seats`);
+      expectStatus(before, 200);
+      assert(before.data.seats.length === 12 && before.data.seats.every((s) => s.status === 'available'), 'expected 12 free seats');
+      const owner = await User.findOne({ email: USER_A.email });
+      reservation = await new Booking({
+        bookingCode: Booking.generateCode(), user: owner._id, showtime: slot._id,
+        seats: ['A1', 'A2'], unitPrice: 40000, totalAmount: 80000,
+      }).save();
+      await SeatClaim.create([
+        { showtime: slot._id, seatLabel: 'A1', booking: reservation._id },
+        { showtime: slot._id, seatLabel: 'A2', booking: reservation._id },
+      ]);
+      const after = await api('GET', `/showtimes/${slot._id}/seats`);
+      const taken = after.data.seats.filter((s) => s.status === 'booked').map((s) => s.label);
+      assert(taken.join() === 'A1,A2', `booked seats: ${taken}`);
+      assert(!/user|email|booking/i.test(JSON.stringify(after.data)), 'availability leaks customer or booking data');
+      const listing = await api('GET', `/showtimes?movie=${film._id}`);
+      expectStatus(listing, 200);
+      const row = listing.data.find((s) => s._id === slot._id);
+      assert(row && row.remainingSeats === 10 && row.totalSeats === 12, `listing row: ${JSON.stringify(row)}`);
+      const adminListing = await api('GET', '/admin/showtimes', { session: adminSession });
+      expectStatus(adminListing, 200);
+      assert(adminListing.data.some((s) => s._id === slot._id && s.status === 'scheduled'), 'admin list is missing the showtime');
+      expectStatus(await api('GET', '/admin/showtimes', { session: sessionA }), 403, 'customer');
+    });
+    await check('rules that protect bookings: locked edit, locked layout, no archive, no deletes', async () => {
+      expectStatus(await api('PATCH', `/showtimes/${slot._id}`, { session: adminSession, body: { ticketPrice: 1 } }), 409, 'edit after booking');
+      expectStatus(await api('PATCH', `/auditoriums/${hall._id}`, { session: adminSession, body: { rows: 5 } }), 409, 'layout');
+      expectStatus(await api('PATCH', `/auditoriums/${hall._id}`, { session: adminSession, body: { name: `SMOKE hall ${RUN_ID}` } }), 200, 'rename');
+      expectStatus(await api('PATCH', `/auditoriums/${hall._id}`, { session: adminSession, body: { isActive: false } }), 409, 'deactivate');
+      expectStatus(await api('DELETE', `/auditoriums/${hall._id}`, { session: adminSession }), 409, 'delete auditorium');
+      expectStatus(await api('PATCH', `/admin/movies/${film._id}`, { session: adminSession, body: { status: 'archived' } }), 409, 'archive');
+      expectStatus(await api('PATCH', `/admin/movies/${film._id}`, { session: adminSession, body: { duration: 90 } }), 409, 'duration');
+      expectStatus(await api('DELETE', `/movies/${film._id}`, { session: adminSession }), 409, 'delete movie');
+      expectStatus(await api('DELETE', `/showtimes/${slot._id}`, { session: adminSession }), 409, 'delete showtime');
+    });
+    await check('an unbooked showtime can be edited (end follows the start) and deleted', async () => {
+      const made = await api('POST', '/showtimes', {
+        session: adminSession, body: { movie: film._id, auditorium: hall._id, startTime: iso(9 * DAY_MS), ticketPrice: 40000 },
+      });
+      expectStatus(made, 201);
+      const moved = await api('PATCH', `/showtimes/${made.data._id}`, { session: adminSession, body: { startTime: iso(10 * DAY_MS), ticketPrice: 45000 } });
+      expectStatus(moved, 200);
+      assert(new Date(moved.data.endTime) - new Date(moved.data.startTime) === 100 * 60 * 1000, 'end did not follow the start');
+      expectStatus(await api('DELETE', `/showtimes/${made.data._id}`, { session: adminSession }), 200);
+      expectStatus(await api('DELETE', `/showtimes/${made.data._id}`, { session: adminSession }), 404);
+    });
+    await check('cancelling a showtime cancels its bookings and frees the seats, and can be repeated', async () => {
+      const done = await api('PATCH', `/showtimes/${slot._id}/cancel`, { session: adminSession });
+      expectStatus(done, 200);
+      assert(done.data.cancelledBookings === 1 && done.data.showtime.status === 'cancelled', JSON.stringify(done.data));
+      const booking = await Booking.findById(reservation._id);
+      assert(booking.status === 'cancelled' && booking.cancelledAt, `booking is ${booking.status}`);
+      assert(await SeatClaim.countDocuments({ showtime: slot._id }) === 0, 'seat claims were not removed');
+      expectStatus(await api('GET', `/showtimes/${slot._id}/seats`), 404, 'cancelled showtime seats');
+      const again = await api('PATCH', `/showtimes/${slot._id}/cancel`, { session: adminSession });
+      expectStatus(again, 200);
+      assert(again.data.cancelledBookings === 0, 'second cancel changed bookings');
+      const listing = await api('GET', `/showtimes?movie=${film._id}`);
+      assert(!listing.data.some((s) => s._id === slot._id), 'a cancelled showtime is still in the public list');
     });
 
     // ---- Auditorium / Showtime / Booking / SeatClaim (straight against the database) ------------

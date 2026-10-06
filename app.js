@@ -9,6 +9,9 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const movieRoutes = require('./routes/movies');
 const bookingRoutes = require('./routes/bookings');
+const adminMovieRoutes = require('./routes/adminMovies');
+const auditoriumRoutes = require('./routes/auditoriums');
+const showtimeRoutes = require('./routes/showtimes');
 
 // Serves the built React app, and index.html for page URLs the browser router handles
 // (/movies/123, /my-bookings...). Anything with a file extension that does not exist is a real 404.
@@ -50,6 +53,10 @@ function createApp({ clientDist = config.clientDist } = {}) {
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/movies', movieRoutes);
+  app.use('/api/admin/movies', adminMovieRoutes);
+  app.use('/api/admin/showtimes', showtimeRoutes.adminRouter);
+  app.use('/api/auditoriums', auditoriumRoutes);
+  app.use('/api/showtimes', showtimeRoutes);
   app.use('/api/bookings', bookingRoutes);
 
   // Health check

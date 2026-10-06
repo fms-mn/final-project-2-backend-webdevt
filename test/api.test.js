@@ -388,14 +388,15 @@ test('admin: movie writes need an admin session and a CSRF token', async () => {
   addUser({ email: 'boss@example.com', role: 'admin' });
   const user = await login('ann@example.com');
   const admin = await login('boss@example.com');
-  for (const [method, path] of [['POST', '/api/movies'], ['PUT', '/api/movies/abc'], ['DELETE', '/api/movies/abc']]) {
+  for (const [method, path] of [
+    ['POST', '/api/admin/movies'], ['PATCH', '/api/admin/movies/abc'], ['DELETE', '/api/movies/abc'],
+  ]) {
     assert.equal((await call(method, path, { body: {} })).status, 401, `${method} anonymous`);
     assert.equal((await call(method, path, { body: {}, session: user })).status, 403, `${method} user`);
     assert.equal((await call(method, path, { body: {}, session: { cookie: admin.cookie } })).status, 403, `${method} admin without csrf`);
   }
-  // The full list (drafts included) is admin-only; it is not shadowed by GET /api/movies/:id.
-  assert.equal((await call('GET', '/api/movies/manage/all')).status, 401, 'full list anonymous');
-  assert.equal((await call('GET', '/api/movies/manage/all', { session: user })).status, 403, 'full list user');
+  assert.equal((await call('GET', '/api/admin/movies')).status, 401, 'full list anonymous');
+  assert.equal((await call('GET', '/api/admin/movies', { session: user })).status, 403, 'full list user');
 });
 
 // ---- bookings placeholder, errors ----------------------------------------------------------
