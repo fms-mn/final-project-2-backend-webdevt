@@ -399,14 +399,17 @@ test('admin: movie writes need an admin session and a CSRF token', async () => {
   assert.equal((await call('GET', '/api/admin/movies', { session: user })).status, 403, 'full list user');
 });
 
-// ---- bookings placeholder, errors ----------------------------------------------------------
-test('bookings: protected, and 501 until the booking engine is rebuilt', async () => {
+// ---- bookings: who may call what (the booking rules are tested in bookings.test.js) ----------
+test('bookings: every route needs a signed-in user, the list is admin only', async () => {
   addUser({ email: 'ann@example.com' });
   const session = await login('ann@example.com');
   assert.equal((await call('GET', '/api/bookings/my')).status, 401);
   assert.equal((await call('POST', '/api/bookings', { body: {} })).status, 401);
-  assert.equal((await call('GET', '/api/bookings/my', { session })).status, 501);
-  assert.equal((await call('POST', '/api/bookings', { body: {}, session })).status, 501);
+  assert.equal((await call('GET', '/api/bookings/000000000000000000000000')).status, 401);
+  assert.equal((await call('PATCH', '/api/bookings/000000000000000000000000/cancel')).status, 401);
+  assert.equal((await call('GET', '/api/bookings')).status, 401);
+  assert.equal((await call('GET', '/api/bookings', { session })).status, 403);
+  assert.equal((await call('POST', '/api/bookings', { body: {}, session: { cookie: session.cookie } })).status, 403, 'no csrf');
 });
 
 test('errors: one JSON shape for 404s, malformed ids and bad JSON; nothing leaks', async () => {

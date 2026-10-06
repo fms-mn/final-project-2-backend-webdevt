@@ -104,6 +104,12 @@ function fakeModel(Model, rows, { uniqueOn } = {}) {
     found.forEach((doc) => apply(doc, update));
     return { modifiedCount: found.length };
   });
+  // `uniqueOn` is a field name or a list of field names that must be unique together.
+  const uniqueFields = uniqueOn ? [].concat(uniqueOn) : null;
+  const clashes = (doc) => uniqueFields && rows.some(
+    (other) => other !== doc && uniqueFields.every((field) => same(other[field], doc[field])),
+  );
+  const duplicateKey = () => Object.assign(new Error('duplicate key'), { code: 11000 });
   test.mock.method(Model.prototype, 'save', async function save() {
     await this.validate();
     if (this.$__row) { // an update: copy the saved copy back onto the stored document
@@ -111,26 +117,52 @@ function fakeModel(Model, rows, { uniqueOn } = {}) {
       return this;
     }
     if (!rows.includes(this)) {
-      if (uniqueOn && rows.some((doc) => doc[uniqueOn] === this[uniqueOn])) {
-        throw Object.assign(new Error('duplicate key'), { code: 11000 });
-      }
+      if (clashes(this)) throw duplicateKey();
       rows.push(this);
     }
     this.$isNew = false;
     return this;
+  });
+  // Like the real ordered insertMany: documents before a duplicate stay inserted (inside a
+  // transaction the rollback removes them again).
+  test.mock.method(Model, 'insertMany', async (docs) => {
+    const inserted = [];
+    for (const fields of docs) {
+      const doc = new Model(fields);
+      await doc.validate();
+      if (clashes(doc)) throw duplicateKey();
+      doc.$isNew = false;
+      rows.push(doc);
+      inserted.push(doc);
+    }
+    return inserted;
   });
 }
 
 // Replaces mongoose.startSession. `beforeAttempt(attempt)` can change the data and return true
 // to make that attempt fail with a transient transaction error, like a real write conflict:
 // the callback is then run again from scratch, exactly as the MongoDB driver does.
-function fakeTransactions({ beforeAttempt } = {}) {
+// `stores` are the row arrays to roll back when the callback throws, like a real abort.
+// `transient(attempt)` can make an attempt fail with a retryable error after it ran.
+function fakeTransactions({ beforeAttempt, stores = [], transient, maxAttempts = 50 } = {}) {
+  const snapshot = () => stores.map((rows) => rows.map((doc) => [doc, doc.toObject()]));
+  const restore = (saved) => saved.forEach((entries, index) => {
+    stores[index].splice(0, stores[index].length, ...entries.map(([doc]) => doc));
+    entries.forEach(([doc, data]) => doc.set(data));
+  });
   test.mock.method(mongoose, 'startSession', async () => ({
     async withTransaction(work) {
-      for (let attempt = 1; attempt <= 5; attempt += 1) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         if (beforeAttempt && beforeAttempt(attempt)) continue;
-        await work();
-        return;
+        const saved = snapshot();
+        try {
+          await work();
+          if (transient && transient(attempt)) { restore(saved); continue; }
+          return;
+        } catch (error) {
+          restore(saved);
+          throw error;
+        }
       }
       throw new Error('too many transaction retries');
     },
