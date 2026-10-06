@@ -11,11 +11,13 @@ const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
 const MAX_SEATS_PER_BOOKING = 10;
 // Transient conflicts (another booking, cancellation or edit on the same showtime committed first)
 // make MongoDB re-run the transaction. Bounded, so a request can never loop forever.
-const MAX_ATTEMPTS = 10;
-// MongoDB re-runs a conflicting transaction immediately, which would burn every attempt in a few
-// milliseconds while the other booking is still finishing. A short random pause per retry lets it
-// commit first. (Overridable so the offline tests do not wait.)
-const RETRY_PAUSE_MS = Number(process.env.BOOKING_RETRY_PAUSE_MS ?? 15);
+const MAX_ATTEMPTS = 20;
+// MongoDB re-runs a conflicting transaction immediately, which would burn the attempts while the
+// other booking is still finishing (against a cloud database one booking takes a few hundred
+// milliseconds). A growing random pause per retry spreads the competing requests out so they
+// commit one after another. (Overridable so the offline tests do not wait.)
+const RETRY_PAUSE_MS = Number(process.env.BOOKING_RETRY_PAUSE_MS ?? 30);
+const RETRY_PAUSE_MAX_MS = 400;
 const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 // Only the showtime and the seat labels come from the customer. The user, price, total, code and
@@ -53,12 +55,12 @@ const isDuplicateKey = (error) => Boolean(error) && error.code === 11000;
 
 // Books every requested seat or none of them, in ONE transaction:
 //  1. the showtime must exist, be scheduled and not have started;
-//  2. the showtime record is written, so a concurrent cancellation/edit conflicts with this
-//     booking and one of them re-runs against the other's result;
-//  3. every label must be a seat of the showtime's auditorium;
-//  4. the Booking and one SeatClaim per seat are inserted. The unique (showtime, seatLabel) index
+//  2. every label must be a seat of the showtime's auditorium;
+//  3. the Booking and one SeatClaim per seat are inserted. The unique (showtime, seatLabel) index
 //     rejects a seat that is already claimed: the whole transaction rolls back and the customer
-//     gets a 409 and can choose again.
+//     gets a 409 and can choose again;
+//  4. the showtime record is written (last, see below), so a concurrent cancellation/edit of the
+//     same showtime conflicts with this booking and one of them re-runs against the other's result.
 async function createBooking(userId, body) {
   const input = readInput(body);
 
@@ -70,7 +72,7 @@ async function createBooking(userId, body) {
         if (attempts > MAX_ATTEMPTS) {
           throw new HttpError(503, 'This showtime is very busy right now. Please try again in a moment.');
         }
-        if (attempts > 1) await pause(Math.min(250, RETRY_PAUSE_MS * attempts) * (0.5 + Math.random()));
+        if (attempts > 1) await pause(Math.min(RETRY_PAUSE_MAX_MS, RETRY_PAUSE_MS * attempts) * (0.5 + Math.random()));
 
         const showtime = await Showtime.findById(input.showtime).session(session);
         if (!showtime) throw new HttpError(404, 'Showtime not found');
@@ -80,7 +82,6 @@ async function createBooking(userId, body) {
         if (showtime.startTime <= new Date()) {
           throw new HttpError(409, 'This showtime has already started');
         }
-        await Showtime.updateOne({ _id: showtime._id }, { $inc: { bookingRevision: 1 } }, { session });
 
         const auditorium = await Auditorium.findById(showtime.auditorium).session(session);
         if (!auditorium) throw new HttpError(409, 'This showtime has no auditorium');
@@ -116,6 +117,12 @@ async function createBooking(userId, body) {
           }
           throw error;
         }
+
+        // Written LAST, right before the commit, so the window in which two bookings of the same
+        // showtime can clash is as short as possible. It still does its job: if a cancellation or
+        // edit of this showtime committed after this transaction began, this write conflicts, the
+        // transaction re-runs and everything above is validated again.
+        await Showtime.updateOne({ _id: showtime._id }, { $inc: { bookingRevision: 1 } }, { session });
         return booking;
       });
     } catch (error) {
