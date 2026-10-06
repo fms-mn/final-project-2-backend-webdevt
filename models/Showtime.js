@@ -21,6 +21,10 @@ const showtimeSchema = new mongoose.Schema(
       enum: ['scheduled', 'cancelled'],
       default: 'scheduled',
     },
+    // Bumped by every booking (see services/bookings.js). Writing the showtime inside the booking
+    // transaction makes a booking conflict with a concurrent cancellation or edit of the same
+    // showtime, so whichever runs second re-checks the state the first one left behind.
+    bookingRevision: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

@@ -15,7 +15,8 @@
     "create-admin": "node scripts/create-admin.js",
     "db:reset": "node scripts/reset-dev-db.js",
     "test": "node --test",
-    "db:reset:confirm": "node scripts/reset-dev-db.js --yes"
+    "db:reset:confirm": "node scripts/reset-dev-db.js --yes",
+    "concurrency": "node scripts/concurrency.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

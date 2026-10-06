@@ -762,10 +762,15 @@ async function main() {
       assert(won === 1 && duplicates === 4, `${won} succeeded, ${duplicates} duplicate-key failures`);
     });
 
-    card('Bookings API (being rebuilt)');
-    await check('booking routes answer 501 until the booking engine is built', async () => {
-      expectStatus(await api('GET', '/bookings/my', { session: sessionA }), 501);
-      expectStatus(await api('POST', '/bookings', { session: sessionA, body: {} }), 501);
+    card('Bookings API');
+    await check('booking routes are protected and validate their input (the full proof is npm run concurrency)', async () => {
+      expectStatus(await api('GET', '/bookings/my'), 401, 'anonymous');
+      expectStatus(await api('POST', '/bookings', { body: {} }), 401, 'anonymous');
+      expectStatus(await api('POST', '/bookings', { session: sessionA, body: {} }), 400, 'empty booking');
+      const mine = await api('GET', '/bookings/my', { session: sessionA });
+      expectStatus(mine, 200);
+      assert(Array.isArray(mine.data), 'my bookings is not a list');
+      expectStatus(await api('GET', '/bookings', { session: sessionA }), 403, 'customer asking for every booking');
     });
 
     // Last on purpose: it deliberately fails many logins for one made-up email.
