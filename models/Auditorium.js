@@ -50,6 +50,10 @@ const auditoriumSchema = new mongoose.Schema(
       ],
     },
     isActive: { type: Boolean, default: true },
+    // Bumped on every schedule change in this auditorium (see services/showtimes.js). Writing the
+    // auditorium inside the transaction makes two concurrent schedule changes conflict, so they
+    // run one after the other and the second one sees the first one's showtime.
+    scheduleRevision: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
