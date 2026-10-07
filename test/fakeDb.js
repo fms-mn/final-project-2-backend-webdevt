@@ -113,7 +113,12 @@ function fakeModel(Model, rows, { uniqueOn } = {}) {
   test.mock.method(Model.prototype, 'save', async function save() {
     await this.validate();
     if (this.$__row) { // an update: copy the saved copy back onto the stored document
-      this.$__row.set(this.toObject());
+      const saved = this.toObject();
+      // A field that was cleared on the copy is unset in the real database too.
+      for (const field of Object.keys(this.$__row.toObject())) {
+        if (!(field in saved)) this.$__row.set(field, undefined);
+      }
+      this.$__row.set(saved);
       return this;
     }
     if (!rows.includes(this)) {
