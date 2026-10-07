@@ -7,6 +7,7 @@ const User = require('../models/User');
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
+const { getSettings } = require('./settings');
 
 const MAX_SEATS_PER_BOOKING = 10;
 // Transient conflicts (another booking, cancellation or edit on the same showtime committed first)
@@ -79,8 +80,15 @@ async function createBooking(userId, body) {
         if (showtime.status !== 'scheduled') {
           throw new HttpError(409, 'This showtime has been cancelled');
         }
-        if (showtime.startTime <= new Date()) {
+        // A hidden showtime does not exist as far as customers are concerned.
+        if (showtime.isPublished === false) throw new HttpError(404, 'Showtime not found');
+        const untilStart = showtime.startTime.getTime() - Date.now();
+        if (untilStart <= 0) {
           throw new HttpError(409, 'This showtime has already started');
+        }
+        const { salesCutoffMinutes } = await getSettings(session);
+        if (untilStart <= salesCutoffMinutes * 60 * 1000) {
+          throw new HttpError(409, `Online booking for this showtime closed ${salesCutoffMinutes} minutes before it starts`);
         }
 
         const auditorium = await Auditorium.findById(showtime.auditorium).session(session);
@@ -89,6 +97,12 @@ async function createBooking(userId, body) {
         const unknown = input.seats.filter((seat) => !known.has(seat));
         if (unknown.length) {
           throw badRequest({ seats: `Not a seat in this auditorium: ${unknown.join(', ')}` });
+        }
+
+        const blocked = new Set([...(auditorium.blockedSeats || []), ...(showtime.blockedSeats || [])]);
+        const unavailable = input.seats.filter((seat) => blocked.has(seat));
+        if (unavailable.length) {
+          throw new HttpError(409, `These seats cannot be booked: ${unavailable.join(', ')}`);
         }
 
         const booking = new Booking({
@@ -190,7 +204,14 @@ async function describeBookings(bookings, { admin = false } = {}) {
       bookedAt: booking.bookedAt,
       cancelledAt: booking.cancelledAt,
       showtime: showtime
-        ? { _id: showtime._id, startTime: showtime.startTime, endTime: showtime.endTime, status: showtime.status }
+        ? {
+          _id: showtime._id,
+          startTime: showtime.startTime,
+          endTime: showtime.endTime,
+          status: showtime.status,
+          rescheduledAt: showtime.rescheduledAt || null,
+          originalStartTime: showtime.originalStartTime || null,
+        }
         : { _id: booking.showtime },
       movie: movie
         ? { _id: movie._id, title: movie.title, posterUrl: movie.posterUrl, rating: movie.rating, duration: movie.duration }

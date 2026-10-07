@@ -15,6 +15,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const Setting = require('../models/Setting');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
 
 const PASSWORD = 'correct-horse-1';
@@ -28,12 +29,13 @@ const auditoriums = [];
 const showtimes = [];
 const bookings = [];
 const claims = [];
+const settings = [];
 let server;
 let base;
 let passwordHash;
 let transactionHook = null;
 
-const clear = () => [users, movies, auditoriums, showtimes, bookings, claims].forEach((rows) => { rows.length = 0; });
+const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings].forEach((rows) => { rows.length = 0; });
 // One fixed starting point, so back-to-back showtimes line up to the millisecond.
 const T0 = Date.now();
 const inFuture = (ms) => new Date(T0 + ms);
@@ -110,6 +112,7 @@ test.before(async () => {
   fakeModel(Showtime, showtimes);
   fakeModel(Booking, bookings);
   fakeModel(SeatClaim, claims);
+  fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeTransactions({ beforeAttempt: (attempt) => (transactionHook ? transactionHook(attempt) : false) });
   server = await new Promise((resolve) => { const s = createApp().listen(0, () => resolve(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
@@ -361,11 +364,12 @@ test('create showtime: computes the end, checks references, price and the future
   assert.equal(showtimes.length, 1, 'nothing was created by the rejected requests');
 });
 
-test('create showtime: overlaps are 409, back-to-back and other rooms are fine', async () => {
+test('create showtime: overlaps are 409, back-to-back and other rooms are fine (no turnaround set)', async () => {
   const movie = addMovie({ duration: 120 });
   const hallA = addAuditorium();
   const hallB = addAuditorium();
   const admin = await signIn('admin');
+  assert.equal((await call('PATCH', '/api/admin/settings', { body: { turnaroundMinutes: 0 }, session: admin })).status, 200);
   const make = (hall, offset) => call('POST', '/api/showtimes', {
     body: { movie: String(movie._id), auditorium: String(hall._id), startTime: at(offset), ticketPrice: 40000 }, session: admin,
   });

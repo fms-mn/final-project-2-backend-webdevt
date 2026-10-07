@@ -16,6 +16,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const Setting = require('../models/Setting');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
 
 const PASSWORD = 'correct-horse-1';
@@ -30,12 +31,13 @@ const auditoriums = [];
 const showtimes = [];
 const bookings = [];
 const claims = [];
+const settings = [];
 let server;
 let base;
 let passwordHash;
 let hooks = {};
 
-const clear = () => [users, movies, auditoriums, showtimes, bookings, claims].forEach((rows) => { rows.length = 0; });
+const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings].forEach((rows) => { rows.length = 0; });
 
 function add(Model, rows, fields) {
   const doc = new Model(fields);
@@ -101,6 +103,7 @@ test.before(async () => {
   fakeModel(Showtime, showtimes);
   fakeModel(Booking, bookings, { uniqueOn: 'bookingCode' });
   fakeModel(SeatClaim, claims, { uniqueOn: ['showtime', 'seatLabel'] });
+  fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeTransactions({
     stores: [bookings, claims, showtimes, auditoriums],
     beforeAttempt: (attempt) => (hooks.beforeAttempt ? hooks.beforeAttempt(attempt) : false),
