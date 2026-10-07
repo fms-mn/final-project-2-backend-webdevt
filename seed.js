@@ -1,5 +1,5 @@
 /**
- * Adds sample catalog data: movies, two auditoriums and a few upcoming showtimes.
+ * Adds sample catalog data: movies, five auditoriums and a few upcoming showtimes.
  *
  *   npm run seed
  *
@@ -95,11 +95,135 @@ const movies = [
     status: 'draft',
     price: 400,
   },
+  // ---- Classics that are already showing (released long ago) -----------------------------------
+  {
+    title: 'The Dark Knight',
+    synopsis:
+      'Batman, Lieutenant Gordon and District Attorney Harvey Dent set out to dismantle Gotham\'s organized crime, until a chaotic criminal known as the Joker pushes the city to its breaking point.',
+    genre: 'Action',
+    duration: 152,
+    rating: 'PG-13',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg',
+    releaseDate: new Date('2008-07-18'),
+    status: 'published',
+    price: 400,
+  },
+  {
+    title: 'Inception',
+    synopsis:
+      'A skilled thief who steals secrets from inside people\'s dreams is offered a final job: plant an idea in a target\'s mind. The deeper the team goes, the less certain reality becomes.',
+    genre: 'Sci-Fi',
+    duration: 148,
+    rating: 'PG-13',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/ljsZTbVsrQSqZgWeep2B1QiDKuh.jpg',
+    releaseDate: new Date('2010-07-16'),
+    status: 'published',
+    price: 400,
+  },
+  {
+    title: 'Interstellar',
+    synopsis:
+      'With Earth\'s crops failing, a former pilot joins a team of explorers who travel through a wormhole in search of a new home for humanity, at the cost of time with the family they leave behind.',
+    genre: 'Sci-Fi',
+    duration: 169,
+    rating: 'PG-13',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg',
+    releaseDate: new Date('2014-11-07'),
+    status: 'published',
+    price: 450,
+  },
+  {
+    title: 'Parasite',
+    synopsis:
+      'A struggling family schemes its way into the lives of a wealthy household, one job at a time, until an unexpected discovery turns the arrangement into something far more dangerous.',
+    genre: 'Thriller',
+    duration: 132,
+    rating: 'R',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg',
+    releaseDate: new Date('2019-10-11'),
+    status: 'published',
+    price: 350,
+  },
+  {
+    title: 'Spirited Away',
+    synopsis:
+      'On the way to their new home, a ten-year-old girl wanders into a world of spirits and bathhouses where her parents are turned into pigs, and she must work to free them and find her way back.',
+    genre: 'Animation',
+    duration: 125,
+    rating: 'PG',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/39wmItIWsg5sZMyRUHLkWBcuVCM.jpg',
+    releaseDate: new Date('2001-07-20'),
+    status: 'published',
+    price: 300,
+  },
+  {
+    title: 'The Godfather',
+    synopsis:
+      'The aging head of a powerful crime family hands control to his reluctant youngest son, who is drawn deeper into the family business than he ever intended.',
+    genre: 'Drama',
+    duration: 175,
+    rating: 'R',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsRolD1fZdja1.jpg',
+    releaseDate: new Date('1972-03-24'),
+    status: 'published',
+    price: 350,
+  },
+  {
+    title: 'The Matrix',
+    synopsis:
+      'A computer hacker learns that the world he lives in is a simulation built by machines, and joins a small band of rebels fighting to free humanity from it.',
+    genre: 'Sci-Fi',
+    duration: 136,
+    rating: 'R',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+    releaseDate: new Date('1999-03-31'),
+    status: 'published',
+    price: 350,
+  },
+  {
+    title: 'Forrest Gump',
+    synopsis:
+      'A kind-hearted man with a low IQ drifts through decades of American history, unknowingly shaping events along the way while holding on to the one love of his life.',
+    genre: 'Drama',
+    duration: 142,
+    rating: 'PG-13',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/arw2vcBveWOVZr6pxd9XTd1TdQa.jpg',
+    releaseDate: new Date('1994-07-06'),
+    status: 'published',
+    price: 350,
+  },
+  {
+    title: 'Pulp Fiction',
+    synopsis:
+      'The lives of two hitmen, a boxer, a gangster and his wife, and a pair of diner bandits intertwine in four tales of violence and redemption in Los Angeles.',
+    genre: 'Crime',
+    duration: 154,
+    rating: 'R',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg',
+    releaseDate: new Date('1994-10-14'),
+    status: 'published',
+    price: 350,
+  },
+  {
+    title: 'Toy Story',
+    synopsis:
+      'A cowboy doll feels threatened when a flashy new space ranger toy becomes his owner\'s favorite, and the two rivals must work together after they are lost far from home.',
+    genre: 'Animation',
+    duration: 81,
+    rating: 'G',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/uXDfjJbdP4ijW5hWSBrPrlKpxab.jpg',
+    releaseDate: new Date('1995-11-22'),
+    status: 'published',
+    price: 300,
+  },
 ];
 
 const auditoriums = [
   { name: 'Auditorium 1', rows: 8, seatsPerRow: 10 },
   { name: 'Auditorium 2', rows: 6, seatsPerRow: 8 },
+  { name: 'Auditorium 3', rows: 6, seatsPerRow: 10 },
+  { name: 'Auditorium 4', rows: 5, seatsPerRow: 8 },
+  { name: 'Auditorium 5', rows: 8, seatsPerRow: 12 },
 ];
 
 // Showtimes start at these Asia/Manila hours, four hours apart, so the longest sample movie
@@ -143,39 +267,51 @@ const seedDB = async () => {
     }
     console.log(`Added ${addedAuditoriums} missing sample auditoriums`);
 
-    // Showtimes for published sample movies that have none yet. Skips any slot that would
-    // overlap a showtime that already exists in that auditorium.
+    // Showtimes for published sample movies that have none yet. Each movie takes the first
+    // auditorium and start time that is free on all of its showtime days, so any number of sample
+    // movies fit as long as there are free slots, and nothing that already exists is touched.
     const rooms = await Auditorium.find({ name: { $in: auditoriums.map((a) => a.name) } }).sort({ name: 1 });
     const published = movies.filter((movie) => movie.status === 'published');
+    const isFree = async (room, startTime, endTime) => !await Showtime.exists({
+      auditorium: room._id,
+      status: 'scheduled',
+      startTime: { $lt: endTime },
+      endTime: { $gt: startTime },
+    });
     let addedShowtimes = 0;
-    if (rooms.length > 0) {
-      for (const [index, sample] of published.entries()) {
-        const movie = await Movie.findOne({ title: sample.title });
-        if (!movie || movie.status !== 'published') continue;
-        if (await Showtime.exists({ movie: movie._id })) continue;
+    for (const sample of published) {
+      const movie = await Movie.findOne({ title: sample.title });
+      if (!movie || movie.status !== 'published') continue;
+      if (await Showtime.exists({ movie: movie._id })) continue;
 
-        const room = rooms[index % rooms.length];
-        const hour = SLOT_HOURS_MANILA[Math.floor(index / rooms.length) % SLOT_HOURS_MANILA.length];
-        for (const day of SHOWTIME_DAYS) {
-          const startTime = manilaStart(day, hour);
-          const endTime = Showtime.computeEndTime(startTime, movie.duration);
-          const overlapping = await Showtime.exists({
-            auditorium: room._id,
-            status: 'scheduled',
-            startTime: { $lt: endTime },
-            endTime: { $gt: startTime },
+      let placed = false;
+      for (const hour of SLOT_HOURS_MANILA) {
+        for (const room of rooms) {
+          const slots = SHOWTIME_DAYS.map((day) => {
+            const startTime = manilaStart(day, hour);
+            return { startTime, endTime: Showtime.computeEndTime(startTime, movie.duration) };
           });
-          if (overlapping) continue;
-          await new Showtime({
-            movie: movie._id,
-            auditorium: room._id,
-            startTime,
-            endTime,
-            ticketPrice: sample.price * 100,
-          }).save();
-          addedShowtimes += 1;
+          let allFree = true;
+          for (const { startTime, endTime } of slots) {
+            if (!await isFree(room, startTime, endTime)) { allFree = false; break; }
+          }
+          if (!allFree) continue;
+          for (const { startTime, endTime } of slots) {
+            await new Showtime({
+              movie: movie._id,
+              auditorium: room._id,
+              startTime,
+              endTime,
+              ticketPrice: sample.price * 100,
+            }).save();
+            addedShowtimes += 1;
+          }
+          placed = true;
+          break;
         }
+        if (placed) break;
       }
+      if (!placed) console.log(`No free auditorium slot for "${movie.title}", so it has no showtimes yet`);
     }
     console.log(`Added ${addedShowtimes} missing sample showtimes`);
     console.log('Database seeded successfully!');
