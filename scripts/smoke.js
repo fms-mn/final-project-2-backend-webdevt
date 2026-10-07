@@ -243,7 +243,7 @@ async function main() {
   await check('running the seed again adds nothing (no duplicates, no wipe)', async () => {
     const run = runNode([script('seed.js')]);
     assert(run.status === 0, `exit ${run.status}: ${run.stderr || run.stdout}`);
-    for (const what of ['movies', 'auditoriums', 'showtimes']) {
+    for (const what of ['movies', 'trailers', 'auditoriums', 'showtimes']) {
       assert(new RegExp(`Added 0 missing sample ${what}`).test(run.stdout), `second run output: ${run.stdout}`);
     }
   });
