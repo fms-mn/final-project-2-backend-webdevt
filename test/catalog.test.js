@@ -128,8 +128,9 @@ test('public movies: published only, trimmed fields, filters, drafts are 404', a
   assert.equal(list.status, 200);
   assert.deepEqual(list.data.map((m) => m.title).sort(), ['Amelie', 'Dune']);
   assert.deepEqual(Object.keys(list.data[0]).sort(), [
-    '_id', 'duration', 'genre', 'posterUrl', 'rating', 'releaseDate', 'synopsis', 'title',
+    '_id', 'duration', 'genre', 'posterUrl', 'rating', 'releaseDate', 'synopsis', 'title', 'trailerId',
   ]);
+  assert.equal(list.data[0].trailerId, null, 'no trailer by default');
 
   assert.deepEqual((await call('GET', '/api/movies?search=ame')).data.map((m) => m.title), ['Amelie']);
   assert.deepEqual((await call('GET', '/api/movies?search=.*')).data, [], 'search text is not a pattern');
@@ -218,6 +219,62 @@ test('delete movie: only when no showtime ever used it', async () => {
   assert.equal((await call('DELETE', `/api/movies/${free._id}`, { session: admin })).status, 200);
   assert.equal(movies.includes(free), false);
   assert.equal((await call('DELETE', `/api/movies/${free._id}`, { session: admin })).status, 404);
+});
+
+// ---- trailers ------------------------------------------------------------------------------
+test('trailers: only YouTube links are accepted, the public gets just the video id, empty clears it', async () => {
+  const movie = addMovie();
+  const admin = await signIn('admin');
+  const patch = (body) => call('PATCH', `/api/admin/movies/${movie._id}`, { body, session: admin });
+  const publicId = async () => (await call('GET', `/api/movies/${movie._id}`)).data;
+
+  for (const good of [
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com/watch?v=dQw4w9WgXcQ&t=10s',
+    'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtu.be/dQw4w9WgXcQ?si=abc',
+    'https://www.youtube.com/embed/dQw4w9WgXcQ',
+    'https://www.youtube.com/shorts/dQw4w9WgXcQ',
+    'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+  ]) {
+    assert.equal((await patch({ trailerUrl: good })).status, 200, good);
+    const shown = await publicId();
+    assert.equal(shown.trailerId, 'dQw4w9WgXcQ', good);
+    assert.ok(!('trailerUrl' in shown), 'the public response carries only the id');
+  }
+
+  for (const bad of [
+    'https://vimeo.com/123456789',
+    'http://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://www.youtube.com/watch?v=tooshort',
+    'https://www.youtube.com/watch',
+    'https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ',
+    'https://evil.example/https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'javascript:alert(1)',
+    'dQw4w9WgXcQ',
+    42,
+  ]) {
+    const res = await patch({ trailerUrl: bad });
+    assert.equal(res.status, 400, String(bad));
+    assert.ok(res.data.errors.trailerUrl, `${bad}: the error names trailerUrl`);
+  }
+  assert.equal((await publicId()).trailerId, 'dQw4w9WgXcQ', 'rejected links changed nothing');
+
+  assert.equal((await patch({ trailerUrl: '   ' })).status, 200, 'blank clears it');
+  assert.equal((await publicId()).trailerId, null);
+  const adminView = await call('GET', '/api/admin/movies', { session: admin });
+  assert.ok(!('trailerUrl' in adminView.data[0]), 'admins no longer see a link');
+
+  const created = await call('POST', '/api/admin/movies', {
+    session: admin,
+    body: {
+      title: 'With Trailer', synopsis: 'x', genre: 'Drama', rating: 'PG', duration: 90,
+      posterUrl: 'https://example.com/p.jpg', releaseDate: '2026-01-01', status: 'published',
+      trailerUrl: 'https://youtu.be/dQw4w9WgXcQ',
+    },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.trailerUrl, 'https://youtu.be/dQw4w9WgXcQ', 'admins see the link they saved');
 });
 
 // ---- auditoriums ---------------------------------------------------------------------------

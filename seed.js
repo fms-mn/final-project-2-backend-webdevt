@@ -212,6 +212,7 @@ const movies = [
     duration: 81,
     rating: 'G',
     posterUrl: 'https://image.tmdb.org/t/p/w500/uXDfjJbdP4ijW5hWSBrPrlKpxab.jpg',
+    trailerUrl: 'https://www.youtube.com/watch?v=c51ND9Hdbw0',
     releaseDate: new Date('1995-11-22'),
     status: 'published',
     price: 300,
@@ -248,15 +249,27 @@ const seedDB = async () => {
     console.log('Connected to MongoDB');
 
     let addedMovies = 0;
-    for (const { price, ...movie } of movies) {
+    let addedTrailers = 0;
+    for (const { price, trailerUrl, ...movie } of movies) {
       const result = await Movie.updateOne(
         { title: movie.title },
-        { $setOnInsert: movie },
+        { $setOnInsert: { ...movie, ...(trailerUrl ? { trailerUrl } : {}) } },
         { upsert: true, runValidators: true },
       );
       addedMovies += result.upsertedCount;
+      // A movie that already exists keeps everything it has, but gets a sample trailer when it has
+      // none. A trailer an admin already saved is never replaced.
+      if (trailerUrl && !result.upsertedCount) {
+        const filled = await Movie.updateOne(
+          { title: movie.title, trailerUrl: { $exists: false } },
+          { $set: { trailerUrl } },
+          { runValidators: true },
+        );
+        addedTrailers += filled.modifiedCount;
+      }
     }
     console.log(`Added ${addedMovies} missing sample movies`);
+    console.log(`Added ${addedTrailers} missing sample trailers`);
 
     let addedAuditoriums = 0;
     for (const sample of auditoriums) {

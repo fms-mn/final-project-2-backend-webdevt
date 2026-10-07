@@ -9,7 +9,7 @@ const router = express.Router();
 
 // Only these fields may be set through the API.
 const EDITABLE_FIELDS = [
-  'title', 'synopsis', 'genre', 'rating', 'posterUrl', 'duration', 'releaseDate', 'status',
+  'title', 'synopsis', 'genre', 'rating', 'posterUrl', 'duration', 'releaseDate', 'status', 'trailerUrl',
 ];
 const pickEditable = (body = {}) => Object.fromEntries(
   EDITABLE_FIELDS.filter((field) => body[field] !== undefined).map((field) => [field, body[field]]),

@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { integer } = require('./validators');
+const { integer, youtubeLink } = require('./validators');
 
 const HTTP_URL = /^https?:\/\/\S+$/i;
 
@@ -24,6 +24,14 @@ const movieSchema = new mongoose.Schema(
       validate: integer,
     },
     releaseDate: { type: Date, required: true },
+    // Optional YouTube link. The home page banner plays the featured movie's trailer.
+    // An empty text clears it.
+    trailerUrl: {
+      type: String,
+      trim: true,
+      set: (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      validate: youtubeLink,
+    },
     // Only published movies appear in public listings.
     status: {
       type: String,

@@ -4,6 +4,7 @@ const Showtime = require('../models/Showtime');
 const { adminAuth } = require('../middleware/auth');
 const { HttpError, wrap } = require('../utils/http');
 const { requireId, dayRange, badRequest } = require('../utils/validate');
+const { youtubeId } = require('../models/validators');
 
 const router = express.Router();
 
@@ -19,6 +20,8 @@ const publicMovie = (movie) => ({
   posterUrl: movie.posterUrl,
   duration: movie.duration,
   releaseDate: movie.releaseDate,
+  // The YouTube video id of the trailer (or null). The website embeds it in the home banner.
+  trailerId: youtubeId(movie.trailerUrl),
 });
 
 // Get published movies (public). Optional: ?search=text&genre=Drama&releaseFrom=2026-10-01&releaseTo=2026-12-31

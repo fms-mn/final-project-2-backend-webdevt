@@ -22,4 +22,38 @@ const nonEmptyStrings = {
   message: '{PATH} must only contain non-empty text',
 };
 
-module.exports = { integer, nonEmptyArray, uniqueItems, nonEmptyStrings };
+// Returns the 11-character video id of a YouTube link, or null when the text is not one.
+// Only https links on YouTube's own hosts count, so a trailer can never point somewhere else.
+const YOUTUBE_HOSTS = new Set([
+  'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtube-nocookie.com', 'www.youtube-nocookie.com', 'youtu.be',
+]);
+const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
+
+function youtubeId(link) {
+  if (typeof link !== 'string') return null;
+  let url;
+  try {
+    url = new URL(link.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || !YOUTUBE_HOSTS.has(url.hostname)) return null;
+
+  let id = null;
+  if (url.hostname === 'youtu.be') {
+    [, id] = url.pathname.split('/');
+  } else if (url.pathname === '/watch') {
+    id = url.searchParams.get('v');
+  } else {
+    const [, kind, videoId] = url.pathname.split('/');
+    if (kind === 'embed' || kind === 'shorts') id = videoId;
+  }
+  return id && YOUTUBE_ID.test(id) ? id : null;
+}
+
+const youtubeLink = {
+  validator: (value) => value === undefined || value === null || youtubeId(value) !== null,
+  message: '{PATH} must be a YouTube link such as https://www.youtube.com/watch?v=...',
+};
+
+module.exports = { integer, nonEmptyArray, uniqueItems, nonEmptyStrings, youtubeId, youtubeLink };
