@@ -6,6 +6,8 @@ const SeatClaim = require('../models/SeatClaim');
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
+const { getSettings } = require('./settings');
+const { manilaClock, manilaDay, manilaLabel } = require('../utils/manila');
 
 const EDITABLE = ['movie', 'auditorium', 'startTime', 'ticketPrice'];
 
@@ -33,6 +35,10 @@ function readInput(body = {}, { partial }) {
         input.ticketPrice = body.ticketPrice;
       }
     }
+    if (body.published !== undefined) {
+      if (typeof body.published !== 'boolean') fail('published', 'published must be true or false');
+      else input.published = body.published;
+    }
     if (partial && !EDITABLE.some((field) => body[field] !== undefined)) {
       fail('body', `Send at least one of: ${EDITABLE.join(', ')}`);
     }
@@ -57,20 +63,32 @@ async function lockAuditorium(auditoriumId, session) {
   await Auditorium.updateOne({ _id: auditoriumId }, { $inc: { scheduleRevision: 1 } }, { session });
 }
 
-// Two scheduled showtimes in one auditorium may not overlap. Back-to-back (one ends exactly when
-// the next starts) is allowed.
-async function assertNoOverlap({ auditoriumId, startTime, endTime, excludeId, session }) {
+// Two scheduled showtimes in one auditorium may not overlap, and the auditorium needs
+// `turnaroundMinutes` between the end of one show and the start of the next (cleaning, getting
+// people in and out). Returns the showtime in the way, or null when the slot is free.
+async function findClash({ auditoriumId, startTime, endTime, excludeId, turnaroundMinutes = 0, session }) {
+  const gap = turnaroundMinutes * 60 * 1000;
   const filter = {
     auditorium: auditoriumId,
     status: 'scheduled',
-    startTime: { $lt: endTime },
-    endTime: { $gt: startTime },
+    startTime: { $lt: new Date(endTime.getTime() + gap) },
+    endTime: { $gt: new Date(startTime.getTime() - gap) },
   };
   if (excludeId) filter._id = { $ne: excludeId };
-  const clash = await Showtime.findOne(filter).session(session);
-  if (clash) {
-    throw new HttpError(409, 'This auditorium already has a showtime that overlaps that time');
-  }
+  return Showtime.findOne(filter).session(session);
+}
+
+function clashError(clash, startTime, endTime, turnaroundMinutes) {
+  const strict = clash.startTime < endTime && clash.endTime > startTime;
+  const when = `${manilaClock(clash.startTime)}-${manilaClock(clash.endTime)}`;
+  return new HttpError(409, strict
+    ? `This auditorium already has a showtime that overlaps that time (${when})`
+    : `That is too close to another showtime (${when}). The auditorium needs ${turnaroundMinutes} minutes between shows`);
+}
+
+async function assertNoOverlap({ auditoriumId, startTime, endTime, excludeId, turnaroundMinutes = 0, session }) {
+  const clash = await findClash({ auditoriumId, startTime, endTime, excludeId, turnaroundMinutes, session });
+  if (clash) throw clashError(clash, startTime, endTime, turnaroundMinutes);
 }
 
 const assertFuture = (startTime, now) => {
@@ -87,9 +105,10 @@ async function createShowtime(body, now = new Date()) {
     });
     await lockAuditorium(input.auditorium, session);
 
+    const { turnaroundMinutes } = await getSettings(session);
     const endTime = Showtime.computeEndTime(input.startTime, movie.duration);
     await assertNoOverlap({
-      auditoriumId: input.auditorium, startTime: input.startTime, endTime, session,
+      auditoriumId: input.auditorium, startTime: input.startTime, endTime, turnaroundMinutes, session,
     });
 
     const showtime = new Showtime({
@@ -98,6 +117,7 @@ async function createShowtime(body, now = new Date()) {
       startTime: input.startTime,
       endTime,
       ticketPrice: input.ticketPrice,
+      isPublished: input.published ?? true,
     });
     await showtime.save({ session });
     return showtime;
@@ -135,12 +155,14 @@ async function updateShowtime(id, body, now = new Date()) {
     });
     await lockAuditorium(next.auditorium, session);
 
+    const { turnaroundMinutes } = await getSettings(session);
     const endTime = Showtime.computeEndTime(next.startTime, movie.duration);
     await assertNoOverlap({
       auditoriumId: next.auditorium,
       startTime: next.startTime,
       endTime,
       excludeId: showtime._id,
+      turnaroundMinutes,
       session,
     });
 
@@ -184,6 +206,15 @@ async function deleteShowtime(id) {
 
 const idOf = (value) => String(value?._id ?? value);
 
+// Showtimes saved before the visibility switch existed have no value, which counts as visible.
+const isShown = (showtime) => showtime.isPublished !== false;
+
+// Every seat that cannot be booked at this showing: blocked in the auditorium or for the showing.
+const blockedSet = (auditorium, showtime) => new Set([
+  ...((auditorium && auditorium.blockedSeats) || []),
+  ...(showtime.blockedSeats || []),
+]);
+
 // Adds movie, auditorium and seat counts to a page of showtimes. `publicOnly` hides showtimes
 // whose movie is not published and trims the fields to what browsing and booking need.
 async function describeShowtimes(showtimes, { publicOnly }) {
@@ -193,13 +224,14 @@ async function describeShowtimes(showtimes, { publicOnly }) {
   const [movies, auditoriums, claims] = await Promise.all([
     Movie.find({ _id: { $in: movieIds } }),
     Auditorium.find({ _id: { $in: auditoriumIds } }),
-    SeatClaim.find({ showtime: { $in: showtimes.map((s) => s._id) } }).select('showtime'),
+    SeatClaim.find({ showtime: { $in: showtimes.map((s) => s._id) } }).select('showtime seatLabel'),
   ]);
   const movieById = new Map(movies.map((m) => [idOf(m), m]));
   const auditoriumById = new Map(auditoriums.map((a) => [idOf(a), a]));
-  const claimed = new Map();
+  const claimsOf = new Map();
   for (const claim of claims) {
-    claimed.set(idOf(claim.showtime), (claimed.get(idOf(claim.showtime)) || 0) + 1);
+    const key = idOf(claim.showtime);
+    claimsOf.set(key, [...(claimsOf.get(key) || []), claim.seatLabel]);
   }
 
   const rows = [];
@@ -207,7 +239,9 @@ async function describeShowtimes(showtimes, { publicOnly }) {
     const movie = movieById.get(idOf(showtime.movie));
     const auditorium = auditoriumById.get(idOf(showtime.auditorium));
     if (publicOnly && (!movie || movie.status !== 'published' || !auditorium)) continue;
-    const totalSeats = auditorium ? auditorium.seatLabels.length : 0;
+    const blocked = blockedSet(auditorium, showtime);
+    const totalSeats = auditorium ? auditorium.seatLabels.filter((label) => !blocked.has(label)).length : 0;
+    const taken = (claimsOf.get(idOf(showtime._id)) || []).filter((label) => !blocked.has(label)).length;
     rows.push({
       _id: showtime._id,
       movie: movie
@@ -218,14 +252,29 @@ async function describeShowtimes(showtimes, { publicOnly }) {
       endTime: showtime.endTime,
       ticketPrice: showtime.ticketPrice,
       totalSeats,
-      remainingSeats: Math.max(0, totalSeats - (claimed.get(idOf(showtime._id)) || 0)),
-      ...(publicOnly ? {} : { status: showtime.status }),
+      remainingSeats: Math.max(0, totalSeats - taken),
+      ...(publicOnly ? {} : {
+        status: showtime.status,
+        published: isShown(showtime),
+        blockedSeats: showtime.blockedSeats || [],
+        rescheduledAt: showtime.rescheduledAt || null,
+        originalStartTime: showtime.originalStartTime || null,
+      }),
     });
   }
   return rows;
 }
 
 module.exports = {
+  idOf,
+  isShown,
+  blockedSet,
+  loadReferences,
+  lockAuditorium,
+  findClash,
+  clashError,
+  assertNoOverlap,
+  assertFuture,
   createShowtime,
   updateShowtime,
   cancelShowtime,

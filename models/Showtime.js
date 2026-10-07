@@ -25,6 +25,14 @@ const showtimeSchema = new mongoose.Schema(
     // transaction makes a booking conflict with a concurrent cancellation or edit of the same
     // showtime, so whichever runs second re-checks the state the first one left behind.
     bookingRevision: { type: Number, default: 0 },
+    // Hidden showtimes are invisible to customers and cannot be booked. Showtimes saved before
+    // this field existed have no value, which counts as published (see isHidden below).
+    isPublished: { type: Boolean, default: true },
+    // Seats blocked for this showing only (the auditorium can block seats for every showing).
+    blockedSeats: { type: [String], default: [] },
+    // Set when an admin moves the showing: when it was first planned and when it last moved.
+    originalStartTime: { type: Date },
+    rescheduledAt: { type: Date },
   },
   { timestamps: true },
 );

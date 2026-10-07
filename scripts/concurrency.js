@@ -12,7 +12,10 @@
  *   - a multi-seat booking where one seat is taken leaves no booking and no seat claims;
  *   - many customers booking different seats at once all succeed (conflicts retry internally);
  *   - a showtime cancelled while bookings are arriving never ends up with a confirmed booking;
- *   - cancelling frees the seat so it can be booked again.
+ *   - cancelling frees the seat so it can be booked again;
+ *   - blocking a seat while customers race to book it never leaves a booked seat that is blocked;
+ *   - hiding a showing while customers race to book it never leaves a hidden showing with tickets;
+ *   - three admins scheduling the same room and time at once: exactly one showing is created.
  * Everything it creates is named "conc-..." / "[CONC] ..." and is deleted again at the end.
  */
 const path = require('path');
@@ -195,6 +198,51 @@ async function main() {
     const confirmed = await Booking.countDocuments({ showtime: showtime._id, status: 'confirmed' });
     assert(confirmed === 0, `${confirmed} confirmed booking(s) are left on a cancelled showtime`);
     assert(await claimsOf(showtime) === 0, 'seat claims are left on a cancelled showtime');
+  });
+
+  await check('blocking a seat while customers race to book it: a seat is never both booked and blocked', async () => {
+    const showtime = await newShowtime();
+    const [blocked, ...answers] = await Promise.all([
+      api('PUT', `/showtimes/${showtime._id}/blocked-seats`, { session: admin, body: { seats: ['A1'] } }),
+      ...customers.slice(0, 6).map((c) => book(c, showtime, ['A1'])),
+    ]);
+    assert(answers.every((a) => [201, 409, 503].includes(a.status)), `unexpected statuses: ${statuses(answers)}`);
+    const booked = await Booking.countDocuments({ showtime: showtime._id, status: 'confirmed' });
+    if (blocked.status === 200) {
+      assert(booked === 0, `the seat was blocked, yet ${booked} booking(s) hold it`);
+    } else {
+      assert(blocked.status === 409, `unexpected block status ${blocked.status}`);
+      assert(booked === 1, `the block was refused because a customer holds the seat, but ${booked} bookings exist`);
+    }
+    assert(await claimsOf(showtime) === booked, 'seat claims do not match the bookings');
+  });
+
+  await check('hiding a showing while customers race to book it: a hidden showing never has tickets', async () => {
+    const showtime = await newShowtime();
+    const [hidden, ...answers] = await Promise.all([
+      api('PATCH', `/showtimes/${showtime._id}/visibility`, { session: admin, body: { published: false } }),
+      ...customers.slice(0, 6).map((c, i) => book(c, showtime, [`B${i + 1}`])),
+    ]);
+    assert(answers.every((a) => [201, 404, 409, 503].includes(a.status)), `unexpected statuses: ${statuses(answers)}`);
+    const booked = await Booking.countDocuments({ showtime: showtime._id, status: 'confirmed' });
+    if (hidden.status === 200) {
+      assert(booked === 0, `the showing was hidden, yet ${booked} confirmed booking(s) exist`);
+    } else {
+      assert(hidden.status === 409, `unexpected hide status ${hidden.status}`);
+      assert(booked >= 1, 'hiding was refused, but no one holds a ticket');
+    }
+  });
+
+  await check('3 admins scheduling the same room and time at once: exactly one showing is created', async () => {
+    const farDay = new Date(Date.now() + 60 * DAY).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    const answers = await Promise.all([1, 2, 3].map(() => api('POST', '/showtimes/bulk', {
+      session: admin,
+      body: { movie: movie._id, auditorium: hall._id, startDate: farDay, times: ['10:00'], ticketPrice: 40000 },
+    })));
+    assert(count(answers, 201) === 1, `created by ${count(answers, 201)} requests (statuses ${statuses(answers)})`);
+    assert(answers.every((a) => a.status === 201 || a.status === 409), `unexpected statuses: ${statuses(answers)}`);
+    const start = new Date(`${farDay}T10:00:00+08:00`);
+    assert(await Showtime.countDocuments({ auditorium: hall._id, startTime: start }) === 1, 'the same slot was scheduled more than once');
   });
 }
 

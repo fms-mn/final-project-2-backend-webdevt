@@ -4,6 +4,7 @@ const Showtime = require('../models/Showtime');
 const { adminAuth } = require('../middleware/auth');
 const { HttpError, wrap } = require('../utils/http');
 const { requireId, badRequest } = require('../utils/validate');
+const scheduling = require('../services/scheduling');
 
 const router = express.Router();
 
@@ -61,6 +62,12 @@ router.patch('/:id', adminAuth, wrap(async (req, res) => {
   auditorium.set(changes); // save() validates and regenerates seatLabels when the layout changed
   await auditorium.save();
   res.json(auditorium);
+}));
+
+// Replace the seats that cannot be booked in any showing here: { "seats": ["A1", "A2"] }.
+router.put('/:id/blocked-seats', adminAuth, wrap(async (req, res) => {
+  requireId(req.params.id, 'Auditorium');
+  res.json(await scheduling.setRoomBlockedSeats(req.params.id, req.body));
 }));
 
 router.delete('/:id', adminAuth, wrap(async (req, res) => {
