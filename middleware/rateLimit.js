@@ -1,59 +1,50 @@
 const { HttpError } = require('../utils/http');
+const LoginAttempt = require('../models/LoginAttempt');
 
-const registry = [];
-
-// A small in-memory limiter for failed attempts. It is per server process, which is fine for
-// the single Node host the proposal describes.
+// A limiter for failed attempts, kept in the database (see models/LoginAttempt.js) so the count
+// survives a restart and is shared by every server process.
 //
-//   limiter.check(key)  throws a 429 HttpError when the key has used up its failures
-//   limiter.fail(key)   records one failed attempt
-//   limiter.clear(key)  forgets the key (call after a success)
-function createRateLimiter({ windowMs, max }) {
-  const entries = new Map(); // key -> { failures, resetAt }
+//   await limiter.check(key)  throws a 429 HttpError when the key has used up its failures
+//   await limiter.fail(key)   records one failed attempt
+//   await limiter.clear(key)  forgets the key (call after a success)
+//
+// `name` keeps different limiters apart inside the one collection.
+function createRateLimiter({ name, windowMs, max }) {
+  const rowKey = (key) => `${name}|${key}`;
 
-  const live = (key) => {
-    const entry = entries.get(key);
-    if (entry && entry.resetAt > Date.now()) return entry;
-    entries.delete(key);
-    return null;
-  };
-
-  const limiter = {
-    check(key) {
-      const entry = live(key);
+  return {
+    async check(key) {
+      const now = new Date();
+      const entry = await LoginAttempt.findOne({ key: rowKey(key), expiresAt: { $gt: now } });
       if (entry && entry.failures >= max) {
-        const retryAfter = Math.max(1, Math.ceil((entry.resetAt - Date.now()) / 1000));
+        const retryAfter = Math.max(1, Math.ceil((entry.expiresAt - now) / 1000));
+        const minutes = Math.ceil(retryAfter / 60);
         throw new HttpError(
           429,
-          `Too many failed attempts. Try again in ${Math.ceil(retryAfter / 60)} minute(s).`,
+          `Too many failed sign-in attempts. Please wait ${minutes} minute${minutes === 1 ? '' : 's'} before trying again. Even the right password is refused until then.`,
           { retryAfter },
         );
       }
     },
-    fail(key) {
-      const entry = live(key) || { failures: 0, resetAt: Date.now() + windowMs };
-      entry.failures += 1;
-      entries.set(key, entry);
+    async fail(key) {
+      const now = new Date();
+      const filter = { key: rowKey(key), expiresAt: { $gt: now } };
+      // The common case: a live count exists, so add one to it (atomic in MongoDB).
+      if ((await LoginAttempt.updateOne(filter, { $inc: { failures: 1 } })).modifiedCount) return;
+      // First failure, or the old count has run out: start a new one.
+      await LoginAttempt.deleteMany({ key: rowKey(key), expiresAt: { $lte: now } });
+      try {
+        await new LoginAttempt({ key: rowKey(key), failures: 1, expiresAt: new Date(now.getTime() + windowMs) }).save();
+      } catch (error) {
+        if (error.code !== 11000) throw error;
+        // Another request created it a moment ago; count this failure on that row.
+        await LoginAttempt.updateOne(filter, { $inc: { failures: 1 } });
+      }
     },
-    clear(key) {
-      entries.delete(key);
-    },
-    reset() {
-      entries.clear();
+    async clear(key) {
+      await LoginAttempt.deleteOne({ key: rowKey(key) });
     },
   };
-
-  // Drop expired entries now and then so the map cannot grow forever.
-  const timer = setInterval(() => {
-    for (const key of entries.keys()) live(key);
-  }, Math.max(windowMs, 60 * 1000));
-  timer.unref();
-
-  registry.push(limiter);
-  return limiter;
 }
 
-// For tests: forget every limiter's state.
-const resetAllLimiters = () => registry.forEach((limiter) => limiter.reset());
-
-module.exports = { createRateLimiter, resetAllLimiters };
+module.exports = { createRateLimiter };

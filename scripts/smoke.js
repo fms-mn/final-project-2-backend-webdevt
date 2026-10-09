@@ -776,7 +776,7 @@ async function main() {
     // Last on purpose: it deliberately fails many logins for one made-up email.
     card('Login rate limiting');
     await check('repeated failed logins are blocked with a 429 and a Retry-After header', async () => {
-      const limit = Number(process.env.LOGIN_RATE_MAX) || 10;
+      const limit = Number(process.env.LOGIN_RATE_MAX) || 5;
       const target = { email: email('ratelimit'), password: 'wrong-password' };
       let blockedAt = null;
       let retryAfter = null;

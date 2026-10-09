@@ -48,6 +48,6 @@ module.exports = {
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 
   // Failed sign-ins allowed per IP + email within the window. A whole IP gets five times as many.
-  loginRateMax: positiveNumber(process.env.LOGIN_RATE_MAX, 10),
+  loginRateMax: positiveNumber(process.env.LOGIN_RATE_MAX, 5),
   loginRateWindowMs: positiveNumber(process.env.LOGIN_RATE_WINDOW_MINUTES, 15) * 60 * 1000,
 };

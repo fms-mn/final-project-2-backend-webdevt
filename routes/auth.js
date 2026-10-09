@@ -10,8 +10,8 @@ const router = express.Router();
 
 // Failed sign-ins are limited per IP + email, and per IP overall.
 const limits = { windowMs: config.loginRateWindowMs };
-const failuresByEmail = createRateLimiter({ ...limits, max: config.loginRateMax });
-const failuresByIp = createRateLimiter({ ...limits, max: config.loginRateMax * 5 });
+const failuresByEmail = createRateLimiter({ ...limits, name: 'email', max: config.loginRateMax });
+const failuresByIp = createRateLimiter({ ...limits, name: 'ip', max: config.loginRateMax * 5 });
 
 // Compared against when the email is unknown, so a wrong email and a wrong password take
 // about as long and cannot be told apart by timing.
@@ -66,19 +66,19 @@ router.post('/login', wrap(async (req, res) => {
   }
 
   const emailKey = `${req.ip}|${email.trim().toLowerCase()}`;
-  failuresByIp.check(req.ip);
-  failuresByEmail.check(emailKey);
+  await failuresByIp.check(req.ip);
+  await failuresByEmail.check(emailKey);
 
   const user = await User.findOne({ email: email.trim().toLowerCase() });
   const matches = user ? await user.comparePassword(password) : await unknownUserCompare(password);
   if (!user || !matches) {
-    failuresByIp.fail(req.ip);
-    failuresByEmail.fail(emailKey);
+    await failuresByIp.fail(req.ip);
+    await failuresByEmail.fail(emailKey);
     throw new HttpError(401, 'Invalid email or password');
   }
   if (!user.isActive) throw new HttpError(403, 'Account is deactivated');
 
-  failuresByEmail.clear(emailKey);
+  await failuresByEmail.clear(emailKey);
   const csrfToken = startSession(res, user);
   res.json({ user, csrfToken });
 }));

@@ -12,6 +12,7 @@ const Movie = require('../models/Movie');
 const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
+const LoginAttempt = require('../models/LoginAttempt');
 const { fakeModel } = require('./fakeDb');
 
 const PASSWORD = 'correct-horse-1';
@@ -60,7 +61,7 @@ const get = async (path, session) => {
 
 test.before(async () => {
   passwordHash = await User.hashPassword(PASSWORD);
-  [[User, users], [Movie, movies], [Auditorium, auditoriums], [Showtime, showtimes], [Booking, bookings]]
+  [[User, users], [Movie, movies], [Auditorium, auditoriums], [Showtime, showtimes], [Booking, bookings], [LoginAttempt, []]]
     .forEach(([Model, rows]) => fakeModel(Model, rows));
   server = await new Promise((resolve) => { const s = createApp().listen(0, () => resolve(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
