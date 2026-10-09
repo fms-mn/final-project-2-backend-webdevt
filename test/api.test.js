@@ -11,11 +11,13 @@ const mongoose = require('mongoose');
 
 const { createApp } = require('../app');
 const User = require('../models/User');
-const { resetAllLimiters } = require('../middleware/rateLimit');
+const LoginAttempt = require('../models/LoginAttempt');
+const { fakeModel } = require('./fakeDb');
 
 const PASSWORD = 'correct-horse-1';
 const COOKIE = 'filme_session';
 let store = [];
+let attempts = [];
 let server;
 let base;
 let passwordHash;
@@ -27,6 +29,7 @@ const thenable = (getValue, extra = {}) => ({
 });
 
 function installFakeDatabase() {
+  fakeModel(LoginAttempt, attempts, { uniqueOn: 'key' });
   test.mock.method(User, 'findOne', async (filter) => store.find((u) => u.email === filter.email) || null);
   test.mock.method(User, 'findById', (id) => {
     const find = () => store.find((u) => String(u._id) === String(id)) || null;
@@ -97,7 +100,7 @@ test.before(async () => {
 test.after(() => new Promise((resolve) => server.close(resolve)));
 test.beforeEach(() => {
   store = [];
-  resetAllLimiters();
+  attempts.length = 0;
 });
 
 // ---- registration --------------------------------------------------------------------------
@@ -207,7 +210,7 @@ test('login: too many failures -> 429 with Retry-After; other emails unaffected;
   assert.ok(Number(blocked.headers.get('retry-after')) > 0);
   assert.equal((await call('POST', '/api/auth/login', { body: { email: 'b@example.com', password: PASSWORD } })).status, 200);
 
-  resetAllLimiters();
+  attempts.length = 0;
   for (let i = 0; i < 2; i += 1) {
     await call('POST', '/api/auth/login', { body: { email: 'a@example.com', password: 'wrong-wrong-1' } });
   }
@@ -217,6 +220,37 @@ test('login: too many failures -> 429 with Retry-After; other emails unaffected;
   }
   assert.equal((await call('POST', '/api/auth/login', { body: { email: 'a@example.com', password: PASSWORD } })).status, 200,
     'a success clears the failure count');
+});
+
+test('login: the failure count is stored in the database and the block ends when the wait is over', async () => {
+  addUser({ email: 'a@example.com' });
+  for (let i = 0; i < 3; i += 1) {
+    await call('POST', '/api/auth/login', { body: { email: 'a@example.com', password: 'wrong-wrong-1' } });
+  }
+  const row = attempts.find((item) => item.key.startsWith('email|'));
+  assert.equal(row.failures, 3, 'the count is a stored row, so a restart does not reset it');
+  assert.ok(row.expiresAt > new Date());
+  const blocked = await call('POST', '/api/auth/login', { body: { email: 'a@example.com', password: PASSWORD } });
+  assert.equal(blocked.status, 429);
+  assert.match(blocked.data.error || blocked.data.message, /wait \d+ minutes? before trying again/);
+
+  attempts.forEach((item) => { item.expiresAt = new Date(Date.now() - 1000); }); // the wait is over
+  assert.equal((await call('POST', '/api/auth/login', { body: { email: 'a@example.com', password: PASSWORD } })).status, 200);
+  assert.equal((await call('POST', '/api/auth/login', { body: { email: 'a@example.com', password: 'wrong-wrong-1' } })).status, 401);
+  assert.equal(attempts.find((item) => item.key.startsWith('email|')).failures, 1, 'a new count starts after the old one expired');
+});
+
+test('login: without LOGIN_RATE_MAX the limit is 5 failed tries', () => {
+  const saved = process.env.LOGIN_RATE_MAX;
+  delete process.env.LOGIN_RATE_MAX;
+  delete require.cache[require.resolve('../config')];
+  try {
+    assert.equal(require('../config').loginRateMax, 5);
+  } finally {
+    process.env.LOGIN_RATE_MAX = saved;
+    delete require.cache[require.resolve('../config')];
+    require('../config');
+  }
 });
 
 test('logout: clears the cookie, with or without a session', async () => {

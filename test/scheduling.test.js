@@ -16,6 +16,7 @@ const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
 const Setting = require('../models/Setting');
+const LoginAttempt = require('../models/LoginAttempt');
 const { atManila, manilaClock, manilaDay } = require('../utils/manila');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
 
@@ -95,6 +96,7 @@ test.before(async () => {
   fakeModel(Booking, bookings, { uniqueOn: 'bookingCode' });
   fakeModel(SeatClaim, claims, { uniqueOn: ['showtime', 'seatLabel'] });
   fakeModel(Setting, settings, { uniqueOn: 'key' });
+  fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
   fakeTransactions({
     stores: [bookings, claims, showtimes, auditoriums, settings],
     beforeAttempt: (attempt) => (transactionHook ? transactionHook(attempt) : false),

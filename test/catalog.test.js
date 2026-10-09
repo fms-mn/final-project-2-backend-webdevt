@@ -16,6 +16,7 @@ const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
 const Setting = require('../models/Setting');
+const LoginAttempt = require('../models/LoginAttempt');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
 
 const PASSWORD = 'correct-horse-1';
@@ -113,6 +114,7 @@ test.before(async () => {
   fakeModel(Booking, bookings);
   fakeModel(SeatClaim, claims);
   fakeModel(Setting, settings, { uniqueOn: 'key' });
+  fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
   fakeTransactions({ beforeAttempt: (attempt) => (transactionHook ? transactionHook(attempt) : false) });
   server = await new Promise((resolve) => { const s = createApp().listen(0, () => resolve(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
