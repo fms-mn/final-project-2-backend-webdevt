@@ -133,7 +133,8 @@ test('public movies: published only, trimmed fields, filters, drafts are 404', a
   assert.equal(list.status, 200);
   assert.deepEqual(list.data.map((m) => m.title).sort(), ['Amelie', 'Dune']);
   assert.deepEqual(Object.keys(list.data[0]).sort(), [
-    '_id', 'duration', 'genre', 'posterUrl', 'rating', 'releaseDate', 'synopsis', 'title', 'trailerId',
+    '_id', 'duration', 'fromPrice', 'genre', 'nextShowing', 'posterUrl', 'rating', 'releaseDate', 'showStatus',
+    'synopsis', 'title', 'trailerId', 'upcomingShowings',
   ]);
   assert.equal(list.data[0].trailerId, null, 'no trailer by default');
 

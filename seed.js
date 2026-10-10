@@ -12,6 +12,7 @@ const mongoose = require('mongoose');
 const Movie = require('./models/Movie');
 const Auditorium = require('./models/Auditorium');
 const Showtime = require('./models/Showtime');
+const { manilaDay } = require('./utils/manila');
 
 if (!process.env.MONGODB_URI) {
   console.error(
@@ -297,13 +298,20 @@ const seedDB = async () => {
       if (!movie || movie.status !== 'published') continue;
       if (await Showtime.exists({ movie: movie._id })) continue;
 
+      // A movie is never shown before its release day, so a movie that opens later gets no sample showings yet.
+      const releaseDay = manilaDay(movie.releaseDate);
+      if (SHOWTIME_DAYS.every((day) => manilaDay(manilaStart(day, 12)) < releaseDay)) {
+        console.log(`"${movie.title}" is not released until ${releaseDay}, so it has no sample showtimes yet`);
+        continue;
+      }
+
       let placed = false;
       for (const hour of SLOT_HOURS_MANILA) {
         for (const room of rooms) {
           const slots = SHOWTIME_DAYS.map((day) => {
             const startTime = manilaStart(day, hour);
             return { startTime, endTime: Showtime.computeEndTime(startTime, movie.duration) };
-          });
+          }).filter(({ startTime }) => manilaDay(startTime) >= releaseDay);
           let allFree = true;
           for (const { startTime, endTime } of slots) {
             if (!await isFree(room, startTime, endTime)) { allFree = false; break; }

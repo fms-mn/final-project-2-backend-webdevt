@@ -14,6 +14,11 @@ const manilaLabel = (value) => `${new Date(value).toLocaleDateString('en-GB', {
   timeZone: ZONE, weekday: 'short', day: 'numeric', month: 'short',
 })}, ${manilaClock(value)}`;
 
+// "15 Oct 2026": a calendar day in messages.
+const manilaDateLabel = (value) => new Date(value).toLocaleDateString('en-GB', {
+  timeZone: ZONE, day: 'numeric', month: 'short', year: 'numeric',
+});
+
 // The instant of a Manila wall-clock time: ('2026-10-08', '16:00').
 const atManila = (day, clock) => new Date(`${day}T${clock}:00${OFFSET}`);
 
@@ -29,4 +34,4 @@ function daysBetween(from, to) {
   return days;
 }
 
-module.exports = { manilaDay, manilaClock, manilaLabel, atManila, weekdayOf, daysBetween };
+module.exports = { manilaDay, manilaClock, manilaLabel, manilaDateLabel, atManila, weekdayOf, daysBetween };

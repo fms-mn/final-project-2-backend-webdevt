@@ -116,7 +116,7 @@ const testMovie = (suffix, overrides = {}) => ({
   rating: 'PG',
   posterUrl: 'https://example.com/poster.jpg',
   duration: 100,
-  releaseDate: '2030-01-01',
+  releaseDate: '2020-01-01',
   ...overrides,
 });
 

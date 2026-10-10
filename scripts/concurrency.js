@@ -103,7 +103,7 @@ async function main() {
     session: admin,
     body: {
       title: `[CONC] film ${RUN_ID}`, synopsis: 'Temporary.', genre: 'Test', rating: 'PG',
-      posterUrl: 'https://example.com/p.jpg', duration: 90, releaseDate: '2030-01-01', status: 'published',
+      posterUrl: 'https://example.com/p.jpg', duration: 90, releaseDate: '2020-01-01', status: 'published',
     },
   })).data;
   const hall = (await api('POST', '/auditoriums', {

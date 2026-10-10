@@ -11,7 +11,7 @@ const { isObjectId, dayRange, badRequest, collectErrors } = require('../utils/va
 const { atManila, daysBetween, manilaClock, manilaLabel, weekdayOf } = require('../utils/manila');
 const { getSettings } = require('./settings');
 const {
-  idOf, blockedSet, loadReferences, lockAuditorium, findClash, clashError, assertFuture,
+  idOf, blockedSet, loadReferences, lockAuditorium, findClash, clashError, assertFuture, assertReleased, beforeRelease, releaseMessage,
 } = require('./showtimes');
 
 const MAX_DAYS = 31;
@@ -95,6 +95,7 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, now = new Date() })
         const movie = await cached(movies, Movie, slot.movie);
         if (!movie) throw new SlotProblem('The movie no longer exists');
         if (movie.status !== 'published') throw new SlotProblem(`"${movie.title}" is not published`);
+        if (beforeRelease(movie, slot.startTime)) throw new SlotProblem(releaseMessage(movie));
         const room = await cached(rooms, Auditorium, slot.auditorium);
         if (!room) throw new SlotProblem('The auditorium no longer exists');
         if (!room.isActive) throw new SlotProblem(`${room.name} is not active`);
@@ -226,6 +227,7 @@ async function rescheduleShowtime(id, body = {}, now = new Date()) {
     const nextStart = input.startTime ?? showtime.startTime;
     const nextRoomId = input.auditorium ?? idOf(showtime.auditorium);
     assertFuture(nextStart, now);
+    assertReleased(movie, nextStart);
     const room = await Auditorium.findById(nextRoomId).session(session);
     if (!room) throw badRequest({ auditorium: 'Auditorium not found' });
     if (!room.isActive) throw badRequest({ auditorium: 'Auditorium is not active' });

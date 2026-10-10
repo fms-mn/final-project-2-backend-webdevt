@@ -7,7 +7,7 @@ const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
 const { getSettings } = require('./settings');
-const { manilaClock, manilaDay, manilaLabel } = require('../utils/manila');
+const { manilaClock, manilaDay, manilaLabel, manilaDateLabel } = require('../utils/manila');
 
 const EDITABLE = ['movie', 'auditorium', 'startTime', 'ticketPrice'];
 
@@ -91,6 +91,13 @@ async function assertNoOverlap({ auditoriumId, startTime, endTime, excludeId, tu
   if (clash) throw clashError(clash, startTime, endTime, turnaroundMinutes);
 }
 
+// A movie cannot be shown before its release day. Both sides are compared as Manila calendar days.
+const beforeRelease = (movie, startTime) => manilaDay(startTime) < manilaDay(movie.releaseDate);
+const releaseMessage = (movie) => `"${movie.title}" is released on ${manilaDateLabel(movie.releaseDate)}. A showing cannot start before that day.`;
+const assertReleased = (movie, startTime) => {
+  if (beforeRelease(movie, startTime)) throw badRequest({ startTime: releaseMessage(movie) });
+};
+
 const assertFuture = (startTime, now) => {
   if (startTime <= now) throw badRequest({ startTime: 'startTime must be in the future' });
 };
@@ -103,6 +110,7 @@ async function createShowtime(body, now = new Date()) {
     const { movie } = await loadReferences({
       movieId: input.movie, auditoriumId: input.auditorium, session,
     });
+    assertReleased(movie, input.startTime);
     await lockAuditorium(input.auditorium, session);
 
     const { turnaroundMinutes } = await getSettings(session);
@@ -153,6 +161,7 @@ async function updateShowtime(id, body, now = new Date()) {
     const { movie } = await loadReferences({
       movieId: next.movie, auditoriumId: next.auditorium, session,
     });
+    assertReleased(movie, next.startTime);
     await lockAuditorium(next.auditorium, session);
 
     const { turnaroundMinutes } = await getSettings(session);
@@ -275,6 +284,9 @@ module.exports = {
   clashError,
   assertNoOverlap,
   assertFuture,
+  assertReleased,
+  beforeRelease,
+  releaseMessage,
   createShowtime,
   updateShowtime,
   cancelShowtime,

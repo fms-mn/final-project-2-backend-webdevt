@@ -5,6 +5,7 @@ const { adminAuth } = require('../middleware/auth');
 const { HttpError, wrap } = require('../utils/http');
 const { requireId, dayRange, badRequest } = require('../utils/validate');
 const { youtubeId } = require('../models/validators');
+const { withShowingInfo } = require('../services/movieShowings');
 
 const router = express.Router();
 
@@ -47,7 +48,7 @@ router.get('/', wrap(async (req, res) => {
   }
 
   const movies = await Movie.find(filter).sort({ createdAt: -1 });
-  res.json(movies.map(publicMovie));
+  res.json(await withShowingInfo(movies.map(publicMovie)));
 }));
 
 // Get single published movie (public). Drafts and archived movies answer 404.
@@ -55,7 +56,7 @@ router.get('/:id', wrap(async (req, res) => {
   requireId(req.params.id, 'Movie');
   const movie = await Movie.findOne({ _id: req.params.id, status: 'published' });
   if (!movie) throw new HttpError(404, 'Movie not found');
-  res.json(publicMovie(movie));
+  res.json((await withShowingInfo([publicMovie(movie)]))[0]);
 }));
 
 // Delete a movie (admin only). Only a movie no showtime has ever used can be deleted, so
