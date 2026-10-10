@@ -3,11 +3,14 @@ const Showtime = require('../models/Showtime');
 const Movie = require('../models/Movie');
 const Auditorium = require('../models/Auditorium');
 const SeatClaim = require('../models/SeatClaim');
+const Payment = require('../models/Payment');
 const User = require('../models/User');
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
+const config = require('../config');
 const { getSettings } = require('./settings');
+const payments = require('./payments');
 
 const MAX_SEATS_PER_BOOKING = 10;
 // Transient conflicts (another booking, cancellation or edit on the same showtime committed first)
@@ -62,8 +65,15 @@ const isDuplicateKey = (error) => Boolean(error) && error.code === 11000;
 //     gets a 409 and can choose again;
 //  4. the showtime record is written (last, see below), so a concurrent cancellation/edit of the
 //     same showtime conflicts with this booking and one of them re-runs against the other's result.
+//
+// With payments on (the default) the booking is only a HOLD: it is "pending" and the seats stay
+// claimed for HOLD_MINUTES while the customer pays (services/payments.js). Paying confirms it; an
+// unpaid hold expires and the seats go back on sale. With PAYMENT_REQUIRED=false it confirms at once.
 async function createBooking(userId, body) {
   const input = readInput(body);
+  // Seats whose hold has run out, and this customer's own earlier unpaid hold, must not block them.
+  await payments.expireHolds({ showtimeId: input.showtime });
+  await payments.releaseUserHolds(userId, input.showtime);
 
   for (let codeTry = 0; codeTry < 3; codeTry += 1) {
     let attempts = 0;
@@ -112,6 +122,9 @@ async function createBooking(userId, body) {
           seats: input.seats,
           unitPrice: showtime.ticketPrice, // snapshot of the price the customer saw and accepted
           totalAmount: showtime.ticketPrice * input.seats.length,
+          ...(config.paymentRequired
+            ? { status: 'pending', paymentStatus: 'unpaid', holdExpiresAt: new Date(Date.now() + config.holdMinutes * 60 * 1000) }
+            : {}),
         });
         try {
           await booking.save({ session });
@@ -154,15 +167,22 @@ async function cancelBooking(bookingId, actor) {
     const booking = await Booking.findById(bookingId).session(session);
     // Someone else's booking looks exactly like one that does not exist.
     if (!booking || !canAccess(actor, booking)) throw new HttpError(404, 'Booking not found');
-    if (booking.status === 'cancelled') return booking;
+    if (booking.status === 'cancelled' || booking.status === 'expired') return booking;
+    // An unpaid hold is simply given up: nothing was paid, so there is nothing to refund.
+    if (booking.status === 'pending') {
+      await payments.releaseHold(booking._id, 'abandoned', { session });
+      return Booking.findById(booking._id).session(session);
+    }
 
     const showtime = await Showtime.findById(booking.showtime).session(session);
     if (showtime && showtime.startTime <= new Date()) {
       throw new HttpError(409, 'This showtime has already started, so the booking can no longer be cancelled');
     }
 
+    const now = new Date();
     booking.status = 'cancelled';
-    booking.cancelledAt = new Date();
+    booking.cancelledAt = now;
+    await payments.refundBooking(booking, now, session); // a paid booking is refunded in full
     await booking.save({ session });
     await SeatClaim.deleteMany({ booking: booking._id }, { session });
     return booking;
@@ -188,6 +208,15 @@ async function describeBookings(bookings, { admin = false } = {}) {
   const movieById = new Map(movies.map((m) => [idOf(m), m]));
   const auditoriumById = new Map(auditoriums.map((a) => [idOf(a), a]));
   const customerById = new Map(customers.map((u) => [idOf(u), u]));
+  // The payment that matters for each booking: the paid or refunded one, else the latest attempt.
+  const attempts = await Payment.find({ booking: { $in: bookings.map((b) => b._id) } });
+  const paymentByBooking = new Map();
+  for (const payment of [...attempts].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))) {
+    const key = idOf(payment.booking);
+    const current = paymentByBooking.get(key);
+    const settled = ['paid', 'refunded'].includes(payment.status);
+    if (!current || settled || !['paid', 'refunded'].includes(current.status)) paymentByBooking.set(key, payment);
+  }
 
   return bookings.map((booking) => {
     const showtime = showtimeById.get(idOf(booking.showtime));
@@ -203,6 +232,10 @@ async function describeBookings(bookings, { admin = false } = {}) {
       totalAmount: booking.totalAmount,
       bookedAt: booking.bookedAt,
       cancelledAt: booking.cancelledAt,
+      // 'paid' for bookings made before payments existed
+      paymentStatus: booking.paymentStatus || (booking.status === 'confirmed' ? 'paid' : null),
+      holdExpiresAt: booking.status === 'pending' ? booking.holdExpiresAt : null,
+      payment: payments.publicPayment(paymentByBooking.get(idOf(booking))),
       showtime: showtime
         ? {
           _id: showtime._id,

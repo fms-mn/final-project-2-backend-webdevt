@@ -5,6 +5,7 @@
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'offline-test-secret-offline-test-secret';
 process.env.BOOKING_RETRY_PAUSE_MS = '1';
+process.env.PAYMENT_REQUIRED = 'false'; // these tests are about seats, not payments (see payments.test.js)
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,6 +17,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const Payment = require('../models/Payment');
 const Setting = require('../models/Setting');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
 
@@ -31,13 +33,14 @@ const auditoriums = [];
 const showtimes = [];
 const bookings = [];
 const claims = [];
+const payments = [];
 const settings = [];
 let server;
 let base;
 let passwordHash;
 let hooks = {};
 
-const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings].forEach((rows) => { rows.length = 0; });
+const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings, payments].forEach((rows) => { rows.length = 0; });
 
 function add(Model, rows, fields) {
   const doc = new Model(fields);
@@ -103,9 +106,10 @@ test.before(async () => {
   fakeModel(Showtime, showtimes);
   fakeModel(Booking, bookings, { uniqueOn: 'bookingCode' });
   fakeModel(SeatClaim, claims, { uniqueOn: ['showtime', 'seatLabel'] });
+  fakeModel(Payment, payments, { uniqueOn: 'reference' });
   fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeTransactions({
-    stores: [bookings, claims, showtimes, auditoriums],
+    stores: [bookings, claims, showtimes, auditoriums, payments],
     beforeAttempt: (attempt) => (hooks.beforeAttempt ? hooks.beforeAttempt(attempt) : false),
     transient: (attempt) => (hooks.transient ? hooks.transient(attempt) : false),
   });

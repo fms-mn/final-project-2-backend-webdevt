@@ -9,6 +9,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const movieRoutes = require('./routes/movies');
 const bookingRoutes = require('./routes/bookings');
+const paymentRoutes = require('./routes/payments');
 const adminMovieRoutes = require('./routes/adminMovies');
 const auditoriumRoutes = require('./routes/auditoriums');
 const showtimeRoutes = require('./routes/showtimes');
@@ -62,6 +63,7 @@ function createApp({ clientDist = config.clientDist } = {}) {
   app.use('/api/auditoriums', auditoriumRoutes);
   app.use('/api/showtimes', showtimeRoutes);
   app.use('/api/bookings', bookingRoutes);
+  app.use('/api/payments', paymentRoutes);
 
   // Health check
   app.get('/api/health', (req, res) => {

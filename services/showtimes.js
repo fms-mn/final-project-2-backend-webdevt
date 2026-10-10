@@ -3,6 +3,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const payments = require('./payments');
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
@@ -183,13 +184,22 @@ async function cancelShowtime(id, now = new Date()) {
 
     showtime.status = 'cancelled';
     await showtime.save({ session });
-    const result = await Booking.updateMany(
-      { showtime: showtime._id, status: 'confirmed' },
-      { $set: { status: 'cancelled', cancelledAt: now } },
-      { session },
-    );
+    // Paid bookings are cancelled and refunded; unpaid holds are released.
+    const affected = await Booking.find({ showtime: showtime._id, status: { $in: ['confirmed', 'pending'] } }).session(session);
+    let cancelledBookings = 0;
+    for (const booking of affected) {
+      if (booking.status === 'pending') {
+        await payments.releaseHold(booking._id, 'showtime_cancelled', { session });
+      } else {
+        booking.status = 'cancelled';
+        booking.cancelledAt = now;
+        await payments.refundBooking(booking, now, session);
+        await booking.save({ session });
+        cancelledBookings += 1;
+      }
+    }
     await SeatClaim.deleteMany({ showtime: showtime._id }, { session });
-    return { showtime, cancelledBookings: result.modifiedCount ?? 0 };
+    return { showtime, cancelledBookings };
   });
 }
 

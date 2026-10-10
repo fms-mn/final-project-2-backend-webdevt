@@ -22,6 +22,10 @@ const path = require('path');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 process.env.NODE_ENV = process.env.NODE_ENV === 'production' ? 'production' : 'test';
+// The seat checks below are about seats, so they confirm bookings at once. The payment checks at the
+// end switch payments on (the setting is read on every request).
+process.env.PAYMENT_REQUIRED = 'false';
+process.env.PAYMENT_DELAY_MS = '0';
 
 const mongoose = require('mongoose');
 const User = require('../models/User');
@@ -30,6 +34,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const Payment = require('../models/Payment');
 
 const RUN_ID = Date.now();
 const PASSWORD = 'conc-pass-12345';
@@ -85,6 +90,7 @@ async function main() {
   // Transactions and the unique seat index need the indexes to exist.
   await SeatClaim.init();
   await Booking.init();
+  await Payment.init();
 
   const { createApp } = require('../app');
   httpServer = await new Promise((resolve) => { const s = createApp().listen(0, () => resolve(s)); });
@@ -244,6 +250,74 @@ async function main() {
     const start = new Date(`${farDay}T10:00:00+08:00`);
     assert(await Showtime.countDocuments({ auditorium: hall._id, startTime: start }) === 1, 'the same slot was scheduled more than once');
   });
+
+  // ---- payments: seats are held while paying (real database, real transactions) ---------------
+  process.env.PAYMENT_REQUIRED = 'true';
+  const VISA = { method: 'card', number: '4242424242424242', expiry: '12/39', cvc: '123' };
+  const pay = (session, booking, body = VISA) => api('POST', `/bookings/${booking._id}/pay`, { session, body });
+  try {
+    await check('payments: 6 customers hold the same seat at once, exactly one wins, and paying confirms it', async () => {
+      const showtime = await newShowtime();
+      const answers = await Promise.all(customers.slice(0, 6).map((c) => book(c, showtime, ['B1'])));
+      assert(statuses(answers).join() === '201,409,409,409,409,409', `statuses: ${statuses(answers)}`);
+      const winnerIndex = answers.findIndex((a) => a.status === 201);
+      const held = answers[winnerIndex].data;
+      assert(held.status === 'pending' && held.holdExpiresAt, `the hold was ${held.status}`);
+      const paid = await pay(customers[winnerIndex], held);
+      assert(paid.status === 200 && paid.data.booking.status === 'confirmed', `paying gave ${paid.status} ${JSON.stringify(paid.data)}`);
+      assert(await Payment.countDocuments({ booking: held._id, status: 'paid' }) === 1, 'expected exactly one paid payment');
+      assert(await claimsOf(showtime) === 1, 'expected exactly one seat claim');
+    });
+
+    await check('payments: a hold that ran out frees the seat for the next customer, and the late payment is refused', async () => {
+      const showtime = await newShowtime();
+      const first = (await book(customers[0], showtime, ['C1'])).data;
+      await Booking.updateOne({ _id: first._id }, { $set: { holdExpiresAt: new Date(Date.now() - 1000) } });
+      const second = await book(customers[1], showtime, ['C1']);
+      assert(second.status === 201, `the next customer got ${second.status} ${JSON.stringify(second.data)}`);
+      const late = await pay(customers[0], first);
+      assert(late.status === 409, `the late payment got ${late.status}`);
+      assert(await Payment.countDocuments({ booking: first._id, status: 'paid' }) === 0, 'a released booking was charged');
+      assert(await claimsOf(showtime) === 1, 'expected exactly one seat claim');
+    });
+
+    await check('payments: paying and giving up at the same moment never leaves a paid booking without seats', async () => {
+      for (let round = 0; round < 3; round += 1) {
+        const showtime = await newShowtime();
+        const held = (await book(customers[2], showtime, ['D1', 'D2'])).data;
+        await Promise.all([pay(customers[2], held), api('POST', `/bookings/${held._id}/release`, { session: customers[2] })]);
+        const booking = await Booking.findById(held._id);
+        const claims = await claimsOf(showtime);
+        const paid = await Payment.countDocuments({ booking: held._id, status: 'paid' });
+        if (booking.status === 'confirmed') assert(paid === 1 && claims === 2, `confirmed but paid=${paid} claims=${claims}`);
+        else assert(booking.status === 'expired' && paid === 0 && claims === 0, `${booking.status} but paid=${paid} claims=${claims}`);
+      }
+    });
+
+    await check('payments: cancelling a paid booking refunds it once, even when requested twice at the same time', async () => {
+      const showtime = await newShowtime();
+      const held = (await book(customers[3], showtime, ['E1'])).data;
+      await pay(customers[3], held);
+      await Promise.all([1, 2].map(() => api('PATCH', `/bookings/${held._id}/cancel`, { session: customers[3] })));
+      assert(await Payment.countDocuments({ booking: held._id, status: 'refunded' }) === 1, 'expected exactly one refund');
+      assert(await Payment.countDocuments({ booking: held._id, status: 'paid' }) === 0, 'a refunded payment is still marked paid');
+      assert(await claimsOf(showtime) === 0, 'the seat was not freed');
+    });
+
+    await check('payments: cancelling a showing refunds its paid bookings and releases unpaid holds', async () => {
+      const showtime = await newShowtime();
+      const paidOne = (await book(customers[4], showtime, ['F1'])).data;
+      await pay(customers[4], paidOne);
+      const unpaid = (await book(customers[5], showtime, ['F2'])).data;
+      const cancelled = await api('PATCH', `/showtimes/${showtime._id}/cancel`, { session: admin });
+      assert(cancelled.status === 200, `cancel gave ${cancelled.status}`);
+      assert(await Payment.countDocuments({ booking: paidOne._id, status: 'refunded' }) === 1, 'the paid booking was not refunded');
+      assert((await Booking.findById(unpaid._id)).status === 'expired', 'the unpaid hold was not released');
+      assert(await claimsOf(showtime) === 0, 'seats are still claimed');
+    });
+  } finally {
+    process.env.PAYMENT_REQUIRED = 'false';
+  }
 }
 
 async function cleanup() {
@@ -257,7 +331,9 @@ async function cleanup() {
     }, '_id');
     const showtimeIds = showtimes.map((s) => s._id);
     await SeatClaim.deleteMany({ showtime: { $in: showtimeIds } });
-    await Booking.deleteMany({ $or: [{ user: { $in: users.map((u) => u._id) } }, { showtime: { $in: showtimeIds } }] });
+    const owned = await Booking.find({ $or: [{ user: { $in: users.map((u) => u._id) } }, { showtime: { $in: showtimeIds } }] }, '_id');
+    await Payment.deleteMany({ booking: { $in: owned.map((b) => b._id) } });
+    await Booking.deleteMany({ _id: { $in: owned.map((b) => b._id) } });
     await Showtime.deleteMany({ _id: { $in: showtimeIds } });
     await Auditorium.deleteMany({ _id: { $in: halls.map((h) => h._id) } });
     await Movie.deleteMany({ _id: { $in: movies.map((m) => m._id) } });

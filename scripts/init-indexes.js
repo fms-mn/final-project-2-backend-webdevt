@@ -18,8 +18,9 @@ const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
 const Setting = require('../models/Setting');
+const Payment = require('../models/Payment');
 
-const MODELS = [User, Movie, Auditorium, Showtime, Booking, SeatClaim, Setting];
+const MODELS = [User, Movie, Auditorium, Showtime, Booking, SeatClaim, Setting, Payment];
 
 async function main() {
   if (!process.env.MONGODB_URI) {

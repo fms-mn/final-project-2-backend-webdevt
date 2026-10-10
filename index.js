@@ -49,6 +49,10 @@ mongoose
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
+    // Seats held for an unpaid booking go back on sale when the hold runs out. They are also
+    // released whenever seats are shown or booked; this timer just keeps the database tidy.
+    const { expireHolds } = require('./services/payments');
+    setInterval(() => { expireHolds().catch((error) => console.error('Releasing holds failed:', error.message)); }, 30 * 1000).unref();
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err);
