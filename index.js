@@ -42,6 +42,12 @@ const app = createApp();
 // Connect to MongoDB and start server
 const PORT = process.env.PORT || 5000;
 
+// Some Windows setups (VPN adapters, Pi-hole) leave Node's own resolver unable to look up the
+// mongodb+srv:// address even though the browser works. DNS_SERVERS points Node at resolvers that do.
+if (process.env.DNS_SERVERS) {
+  require('dns').setServers(process.env.DNS_SERVERS.split(',').map((server) => server.trim()).filter(Boolean));
+}
+
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => {
