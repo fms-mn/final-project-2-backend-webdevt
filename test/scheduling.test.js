@@ -211,8 +211,10 @@ test('bulk: weekday filter, a dry run writes nothing, limits and bad input are 4
   const many = await post({ endDate: day(30), times: Array.from({ length: 10 }, (_, i) => `${String(8 + i).padStart(2, '0')}:00`) });
   assert.equal(many.status, 400, 'more than 200 showings in one go is refused');
   assert.equal((await post({ movie: String(movie._id).replace(/./, '0') })).status, 400, 'an unknown movie is a 400, not a skipped slot');
+  addMovie({ title: 'Retired', status: 'archived' });
+  assert.equal((await post({ movie: String(movies[1]._id) })).status, 400, 'an archived movie cannot be scheduled');
   addMovie({ title: 'Draft', status: 'draft' });
-  assert.equal((await post({ movie: String(movies[1]._id) })).status, 400, 'only published movies can be scheduled');
+  assert.equal((await post({ movie: String(movies[2]._id), dryRun: true })).status, 200, 'a draft movie can');
 });
 
 test('bulk: a clash fails the whole request unless skipConflicts is set', async () => {

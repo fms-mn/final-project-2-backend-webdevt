@@ -227,8 +227,12 @@ test('an admin who publishes it again clears the "automatic" mark, and a manual 
   const admin = await signIn('boss', 'admin');
   await archiveStaleMovies();
   assert.ok(movie.autoArchivedAt);
+  const refused = await call('PATCH', `/api/admin/movies/${movie._id}`, { session: admin, body: { status: 'published' } });
+  assert.equal(refused.status, 409, 'it is released and has no showing, so it cannot be published as it is');
+  assert.equal(movie.status, 'archived');
+  addShow(movie, addHall(), soon(2 * DAY)); // an admin schedules a showing first...
   const back = await call('PATCH', `/api/admin/movies/${movie._id}`, { session: admin, body: { status: 'published' } });
-  assert.equal(back.status, 200);
+  assert.equal(back.status, 200); // ...and then it can be published
   assert.equal(movie.status, 'published');
   assert.equal(movie.autoArchivedAt, undefined, 'the mark is cleared');
   const manual = await call('POST', `/api/admin/movies/${movie._id}/withdraw`, { session: admin, body: {} });

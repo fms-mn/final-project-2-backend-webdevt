@@ -7,6 +7,7 @@ const Booking = require('../models/Booking');
 const { requireId, badRequest } = require('../utils/validate');
 const { cancelShowtime } = require('../services/showtimes');
 const { withShowingInfo } = require('../services/movieShowings');
+const { assertCanPublish } = require('../services/moviePublishing');
 const { staleMovies, archiveStaleMovies, describeCandidates } = require('../services/movieArchive');
 const { manilaDay, manilaLabel, manilaDateLabel } = require('../utils/manila');
 
@@ -39,6 +40,8 @@ router.get('/', adminAuth, wrap(async (req, res) => {
 
 router.post('/', adminAuth, wrap(async (req, res) => {
   const movie = new Movie(pickEditable(req.body));
+  await movie.validate(); // a bad request is a 400 before the publish rule is looked at
+  if (movie.status === 'published') await assertCanPublish(movie);
   await movie.save();
   res.status(201).json(movie);
 }));
@@ -88,7 +91,9 @@ router.patch('/:id', adminAuth, wrap(async (req, res) => {
   }
 
   if (changes.status !== undefined && changes.status !== movie.status) movie.autoArchivedAt = undefined;
+  const wasPublished = movie.status === 'published';
   movie.set(changes);
+  if (!wasPublished && movie.status === 'published') await assertCanPublish(movie);
   await movie.save(); // runs every schema rule again, not only on the changed fields
   res.json(movie);
 }));

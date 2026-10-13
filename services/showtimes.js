@@ -47,11 +47,12 @@ function readInput(body = {}, { partial }) {
   });
 }
 
-// The movie must be published and the auditorium active, or no one could book the showtime.
+// The movie must not be archived and the auditorium must be active. A draft movie may get showings:
+// customers cannot see them until the movie is published (see services/moviePublishing.js).
 async function loadReferences({ movieId, auditoriumId, session }) {
   const movie = await Movie.findById(movieId).session(session);
   if (!movie) throw badRequest({ movie: 'Movie not found' });
-  if (movie.status !== 'published') throw badRequest({ movie: 'Only published movies can be scheduled' });
+  if (movie.status === 'archived') throw badRequest({ movie: `"${movie.title}" is archived. Set it back to Draft or Published to schedule showings.` });
   const auditorium = await Auditorium.findById(auditoriumId).session(session);
   if (!auditorium) throw badRequest({ auditorium: 'Auditorium not found' });
   if (!auditorium.isActive) throw badRequest({ auditorium: 'Auditorium is not active' });
