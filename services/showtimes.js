@@ -136,6 +136,7 @@ async function createShowtime(body, now = new Date()) {
 
 async function updateShowtime(id, body, now = new Date()) {
   const input = readInput(body, { partial: true });
+  if (isObjectId(id)) await payments.expireHolds({ showtimeId: id }); // a timed-out hold is let go first
 
   return withTransaction(async (session) => {
     const showtime = await Showtime.findById(id).session(session);
@@ -145,7 +146,8 @@ async function updateShowtime(id, body, now = new Date()) {
     }
     if (showtime.startTime <= now) throw new HttpError(409, 'A showtime that has started cannot be edited');
     // Even a cancelled booking counts: its price and seats were promised for that exact showtime.
-    if (await Booking.exists({ showtime: showtime._id }).session(session)) {
+    // A hold that ran out or was let go promised nothing, so it does not lock the showing.
+    if (await Booking.exists({ showtime: showtime._id, status: { $ne: 'expired' } }).session(session)) {
       throw new HttpError(
         409,
         'This showtime already has bookings. Cancel it and create a replacement instead.',

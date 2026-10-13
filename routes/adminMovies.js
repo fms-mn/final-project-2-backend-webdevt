@@ -67,9 +67,11 @@ router.patch('/:id', adminAuth, wrap(async (req, res) => {
   if (!movie) throw new HttpError(404, 'Movie not found');
 
   // A showtime needs a published movie of a known length, so neither may change under it.
+  // Archiving is refused from draft too: an archived movie's showings would still hold the room.
   const leavesPublished = movie.status === 'published'
     && changes.status !== undefined && changes.status !== 'published';
-  if (leavesPublished && await hasFutureShowtime(movie._id)) {
+  const archives = changes.status === 'archived' && movie.status !== 'archived';
+  if ((leavesPublished || archives) && await hasFutureShowtime(movie._id)) {
     throw new HttpError(409, 'This movie has upcoming showtimes. Cancel them before archiving or unpublishing it.');
   }
   const durationChanges = changes.duration !== undefined && Number(changes.duration) !== movie.duration;
@@ -92,8 +94,11 @@ router.patch('/:id', adminAuth, wrap(async (req, res) => {
 
   if (changes.status !== undefined && changes.status !== movie.status) movie.autoArchivedAt = undefined;
   const wasPublished = movie.status === 'published';
+  const oldRelease = new Date(movie.releaseDate).getTime();
   movie.set(changes);
-  if (!wasPublished && movie.status === 'published') await assertCanPublish(movie);
+  // Checked again when a published movie's release date moves: once released it must have showings.
+  const releaseMoved = wasPublished && new Date(movie.releaseDate).getTime() !== oldRelease;
+  if (movie.status === 'published' && (!wasPublished || releaseMoved)) await assertCanPublish(movie);
   await movie.save(); // runs every schema rule again, not only on the changed fields
   res.json(movie);
 }));
