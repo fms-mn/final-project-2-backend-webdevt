@@ -32,6 +32,7 @@ const CARD_FAILURES = {
 };
 const WALLET_NAMES = { gcash: 'GCash', maya: 'Maya' };
 const EXPIRED_MESSAGE = 'Your seats were released because the payment time ran out. Please choose your seats again.';
+const CANCELLED_MESSAGE = 'This showing was cancelled, so your seats were released. Nothing was charged.';
 
 const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 const idOf = (value) => String(value?._id ?? value);
@@ -159,7 +160,12 @@ async function loadPayableBooking(userId, bookingId, now) {
   // Someone else's booking looks exactly like one that does not exist.
   if (!booking || idOf(booking.user) !== idOf(userId)) throw new HttpError(404, 'Booking not found');
   if (booking.status === 'confirmed') return { booking, alreadyPaid: true };
-  if (booking.status !== 'pending') throw new HttpError(409, EXPIRED_MESSAGE);
+  if (booking.status !== 'pending') {
+    // A hold released because the cinema cancelled the showing should say so, not blame the timer.
+    const showtime = await Showtime.findById(booking.showtime);
+    if (showtime?.status === 'cancelled') throw new HttpError(409, CANCELLED_MESSAGE);
+    throw new HttpError(409, EXPIRED_MESSAGE);
+  }
   if (!booking.holdExpiresAt || booking.holdExpiresAt <= now) {
     await releaseHold(booking._id, 'expired');
     throw new HttpError(409, EXPIRED_MESSAGE);
@@ -175,11 +181,16 @@ async function settlePaid(paymentId, now = new Date()) {
     const booking = await Booking.findById(payment.booking).session(session);
     if (!booking) throw new HttpError(404, 'Booking not found');
     if (booking.status === 'confirmed' && payment.status === 'paid') return { booking, payment };
+    // Another attempt on the same hold already went through: this one is not charged.
+    if (booking.status === 'confirmed') throw new HttpError(409, 'This booking is already paid.');
+    // Replaced by a newer attempt (startPayment marks it failed): never charge it.
+    if (payment.status !== 'awaiting_approval') throw new HttpError(409, 'This payment was replaced by a newer one.');
     if (booking.status !== 'pending' || !booking.holdExpiresAt || booking.holdExpiresAt <= now) {
       throw new HttpError(409, EXPIRED_MESSAGE);
     }
     const showtime = await Showtime.findById(booking.showtime).session(session);
-    if (!showtime || showtime.status !== 'scheduled' || showtime.startTime <= now) {
+    // A showing hidden while the customer was paying is off sale too: no ticket for a showing nobody can see.
+    if (!showtime || showtime.status !== 'scheduled' || showtime.isPublished === false || showtime.startTime <= now) {
       throw new HttpError(409, 'This showtime is no longer available, so the payment was not taken.');
     }
 
@@ -237,8 +248,17 @@ async function startPayment(userId, bookingId, body, now = new Date()) {
 
   const failure = CARD_FAILURES[input.digits];
   if (failure) throw await recordFailure(payment, failure[0], failure[1]);
-  const settled = await settlePaid(payment._id, new Date());
-  return { ...settled, awaitingApproval: false };
+  try {
+    const settled = await settlePaid(payment._id, new Date());
+    return { ...settled, awaitingApproval: false };
+  } catch (err) {
+    // Refused (showing cancelled or hidden, hold gone): close the attempt instead of leaving it open.
+    if (err instanceof HttpError && err.status === 409) {
+      await Payment.updateOne({ _id: payment._id, status: 'awaiting_approval' },
+        { $set: { status: 'failed', failureCode: 'refused', failureMessage: err.message } });
+    }
+    throw err;
+  }
 }
 
 // The simulated wallet app: the customer approves or declines a wallet payment.

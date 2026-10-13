@@ -395,6 +395,11 @@ test('refund: cancelling a showing refunds every paid booking and releases unpai
   assert.equal(payments.filter((p) => p.status === 'refunded').length, 2);
   assert.equal(claims.length, 0);
   assert.equal(bookings.find((x) => String(x._id) === c._id).status, 'expired');
+
+  const late = await pay(pending, c, VISA);
+  assert.equal(late.status, 409);
+  assert.match(late.data.message, /showing was cancelled/, 'the customer is told why, not that time ran out');
+  assert.equal(payments.filter((p) => p.status === 'paid' || p.status === 'refunded').length, 2, 'nothing new is charged');
 });
 
 // ---- 7. the rest of the system -------------------------------------------------------------

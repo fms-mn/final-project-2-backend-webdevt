@@ -10,6 +10,7 @@ const { withTransaction } = require('../utils/transaction');
 const { isObjectId, dayRange, badRequest, collectErrors } = require('../utils/validate');
 const { atManila, daysBetween, manilaClock, manilaLabel, weekdayOf } = require('../utils/manila');
 const { getSettings } = require('./settings');
+const payments = require('./payments');
 const {
   idOf, blockedSet, loadReferences, lockAuditorium, findClash, clashError, assertFuture, assertReleased, beforeRelease, releaseMessage,
 } = require('./showtimes');
@@ -215,6 +216,7 @@ async function rescheduleShowtime(id, body = {}, now = new Date()) {
     if (body.startTime === undefined && body.auditorium === undefined) fail('body', 'Send startTime, auditorium or both');
     return found;
   });
+  if (isObjectId(id)) await payments.expireHolds({ showtimeId: id }); // timed-out holds hold no seats
 
   return withTransaction(async (session) => {
     const showtime = await Showtime.findById(id).session(session);
@@ -252,7 +254,9 @@ async function rescheduleShowtime(id, body = {}, now = new Date()) {
 
     showtime.originalStartTime = showtime.originalStartTime || showtime.startTime;
     showtime.rescheduledAt = now;
-    showtime.set({ auditorium: nextRoomId, startTime: nextStart, endTime });
+    // Seats blocked for this showing that the new room does not have are dropped with the move.
+    const blockedSeats = (showtime.blockedSeats || []).filter((label) => room.seatLabels.includes(label));
+    showtime.set({ auditorium: nextRoomId, startTime: nextStart, endTime, blockedSeats });
     await showtime.save({ session });
     return showtime;
   });
@@ -320,6 +324,7 @@ async function setRoomBlockedSeats(id, body = {}, now = new Date()) {
 
 // Replaces the seats blocked for this one showing.
 async function setShowtimeBlockedSeats(id, body = {}, now = new Date()) {
+  if (isObjectId(id)) await payments.expireHolds({ showtimeId: id }); // timed-out holds hold nothing
   return withTransaction(async (session) => {
     const showtime = await Showtime.findById(id).session(session);
     if (!showtime) throw new HttpError(404, 'Showtime not found');

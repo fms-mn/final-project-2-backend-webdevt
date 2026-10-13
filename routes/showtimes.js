@@ -44,6 +44,15 @@ router.get('/', wrap(async (req, res) => {
   filter.startTime = { ...(filter.startTime || {}), $gt: opensUntil };
   const { limit, page } = pageOptions(req.query);
 
+  // Showings of draft or archived movies are left out in the query itself, before paging, so a
+  // page is only short when it is really the last one.
+  const published = (await Movie.find({ status: 'published' })).map((movie) => String(movie._id));
+  if (filter.movie !== undefined) {
+    if (!published.includes(String(filter.movie))) return res.json([]);
+  } else {
+    filter.movie = { $in: published };
+  }
+
   const showtimes = await Showtime.find(filter).sort({ startTime: 1 }).skip((page - 1) * limit).limit(limit);
   res.json(await service.describeShowtimes(showtimes, { publicOnly: true }));
 }));
