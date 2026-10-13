@@ -278,7 +278,7 @@ test('trailers: only YouTube links are accepted, the public gets just the video 
     session: admin,
     body: {
       title: 'With Trailer', synopsis: 'x', genre: 'Drama', rating: 'PG', duration: 90,
-      posterUrl: 'https://example.com/p.jpg', releaseDate: '2026-01-01', status: 'published',
+      posterUrl: 'https://example.com/p.jpg', releaseDate: '2099-01-01', status: 'published', // coming soon: it may be published without showings
       trailerUrl: 'https://youtu.be/dQw4w9WgXcQ',
     },
   });
@@ -348,7 +348,7 @@ test('create showtime: computes the end, checks references, price and the future
   assert.equal(created.data.status, 'scheduled');
   assert.equal(created.data.ticketPrice, 45000);
 
-  const draft = addMovie({ title: 'Draft', status: 'draft' });
+  const archived = addMovie({ title: 'Retired', status: 'archived' });
   const off = addAuditorium({ isActive: false });
   const cases = [
     [{ ...body, startTime: at(-HOUR) }, 'startTime', 'past'],
@@ -358,7 +358,7 @@ test('create showtime: computes the end, checks references, price and the future
     [{ ...body, ticketPrice: -1 }, 'ticketPrice', 'negative'],
     [{ ...body, movie: 'x' }, 'movie', 'bad movie id'],
     [{ ...body, movie: '0'.repeat(24) }, 'movie', 'unknown movie'],
-    [{ ...body, movie: String(draft._id) }, 'movie', 'draft movie'],
+    [{ ...body, movie: String(archived._id) }, 'movie', 'archived movie'],
     [{ ...body, auditorium: '0'.repeat(24) }, 'auditorium', 'unknown auditorium'],
     [{ ...body, auditorium: String(off._id), startTime: at(3 * DAY) }, 'auditorium', 'inactive auditorium'],
   ];
@@ -368,6 +368,11 @@ test('create showtime: computes the end, checks references, price and the future
     assert.ok(res.data.errors[field], `${label}: error names ${field}`);
   }
   assert.equal(showtimes.length, 1, 'nothing was created by the rejected requests');
+
+  // A draft movie may get showings: customers cannot see them until the movie is published.
+  const draft = addMovie({ title: 'Draft', status: 'draft' });
+  const forDraft = await call('POST', '/api/showtimes', { body: { ...body, movie: String(draft._id), startTime: at(5 * DAY) }, session: admin });
+  assert.equal(forDraft.status, 201, JSON.stringify(forDraft.data));
 });
 
 test('create showtime: overlaps are 409, back-to-back and other rooms are fine (no turnaround set)', async () => {

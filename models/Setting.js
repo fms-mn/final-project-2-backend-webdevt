@@ -15,6 +15,11 @@ const settingSchema = new mongoose.Schema(
     salesCutoffMinutes: {
       type: Number, required: true, min: [0, 'salesCutoffMinutes cannot be negative'], max: [1440, 'salesCutoffMinutes is at most 1440'], validate: integer,
     },
+    // A published movie that has been released but has had no showings for this many days is
+    // archived by itself (see services/movieArchive.js). 0 switches this off.
+    autoArchiveDays: {
+      type: Number, min: [0, 'autoArchiveDays cannot be negative'], max: [3650, 'autoArchiveDays is at most 3650'], validate: integer,
+    },
   },
   { timestamps: true },
 );

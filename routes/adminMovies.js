@@ -7,6 +7,8 @@ const Booking = require('../models/Booking');
 const { requireId, badRequest } = require('../utils/validate');
 const { cancelShowtime } = require('../services/showtimes');
 const { withShowingInfo } = require('../services/movieShowings');
+const { assertCanPublish } = require('../services/moviePublishing');
+const { staleMovies, archiveStaleMovies, describeCandidates } = require('../services/movieArchive');
 const { manilaDay, manilaLabel, manilaDateLabel } = require('../utils/manila');
 
 const router = express.Router();
@@ -38,8 +40,20 @@ router.get('/', adminAuth, wrap(async (req, res) => {
 
 router.post('/', adminAuth, wrap(async (req, res) => {
   const movie = new Movie(pickEditable(req.body));
+  await movie.validate(); // a bad request is a 400 before the publish rule is looked at
+  if (movie.status === 'published') await assertCanPublish(movie);
   await movie.save();
   res.status(201).json(movie);
+}));
+
+// Movies the automatic archive rule would archive right now (changes nothing), and a button to
+// run the rule at once. The same rule also runs by itself every hour (see index.js).
+router.get('/auto-archive', adminAuth, wrap(async (req, res) => {
+  res.json(describeCandidates(await staleMovies()));
+}));
+router.post('/auto-archive', adminAuth, wrap(async (req, res) => {
+  const result = await archiveStaleMovies();
+  res.json({ enabled: result.enabled, days: result.days, archived: result.archived });
 }));
 
 router.patch('/:id', adminAuth, wrap(async (req, res) => {
@@ -76,7 +90,10 @@ router.patch('/:id', adminAuth, wrap(async (req, res) => {
     }
   }
 
+  if (changes.status !== undefined && changes.status !== movie.status) movie.autoArchivedAt = undefined;
+  const wasPublished = movie.status === 'published';
   movie.set(changes);
+  if (!wasPublished && movie.status === 'published') await assertCanPublish(movie);
   await movie.save(); // runs every schema rule again, not only on the changed fields
   res.json(movie);
 }));
@@ -104,6 +121,7 @@ router.post('/:id/withdraw', adminAuth, wrap(async (req, res) => {
   // Unpublish first: nothing new can be scheduled for the movie while its showings are cancelled.
   if (movie.status !== status) {
     movie.status = status;
+    movie.autoArchivedAt = undefined;
     await movie.save();
   }
   let cancelledBookings = 0;

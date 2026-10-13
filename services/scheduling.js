@@ -94,7 +94,7 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, now = new Date() })
         if (slot.startTime <= now) throw new SlotProblem('That time has already passed');
         const movie = await cached(movies, Movie, slot.movie);
         if (!movie) throw new SlotProblem('The movie no longer exists');
-        if (movie.status !== 'published') throw new SlotProblem(`"${movie.title}" is not published`);
+        if (movie.status === 'archived') throw new SlotProblem(`"${movie.title}" is archived`);
         if (beforeRelease(movie, slot.startTime)) throw new SlotProblem(releaseMessage(movie));
         const room = await cached(rooms, Auditorium, slot.auditorium);
         if (!room) throw new SlotProblem('The auditorium no longer exists');

@@ -119,14 +119,14 @@ test('settings: defaults, admin only, validated, and saved', async () => {
   assert.equal((await call('GET', '/api/admin/settings', { session: customer })).status, 403);
   assert.equal((await setRules(customer, { turnaroundMinutes: 5 })).status, 403);
 
-  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 15, salesCutoffMinutes: 15 });
-  for (const bad of [{ turnaroundMinutes: -1 }, { turnaroundMinutes: 1.5 }, { salesCutoffMinutes: 'soon' }, { salesCutoffMinutes: 5000 }, { turnaroundMinutes: 241 }, {}, { nonsense: 1 }]) {
+  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 15, salesCutoffMinutes: 15, autoArchiveDays: 30 });
+  for (const bad of [{ turnaroundMinutes: -1 }, { turnaroundMinutes: 1.5 }, { salesCutoffMinutes: 'soon' }, { salesCutoffMinutes: 5000 }, { turnaroundMinutes: 241 }, { autoArchiveDays: -1 }, { autoArchiveDays: 4000 }, {}, { nonsense: 1 }]) {
     assert.equal((await setRules(admin, bad)).status, 400, JSON.stringify(bad));
   }
   const saved = await setRules(admin, { turnaroundMinutes: 30 });
-  assert.deepEqual(saved.data, { turnaroundMinutes: 30, salesCutoffMinutes: 15 }, 'the other rule keeps its value');
+  assert.deepEqual(saved.data, { turnaroundMinutes: 30, salesCutoffMinutes: 15, autoArchiveDays: 30 }, 'the other rules keep their values');
   await setRules(admin, { salesCutoffMinutes: 0 });
-  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 30, salesCutoffMinutes: 0 });
+  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 30, salesCutoffMinutes: 0, autoArchiveDays: 30 });
   assert.equal(settings.length, 1, 'one settings record, however often it is saved');
 });
 
@@ -211,8 +211,10 @@ test('bulk: weekday filter, a dry run writes nothing, limits and bad input are 4
   const many = await post({ endDate: day(30), times: Array.from({ length: 10 }, (_, i) => `${String(8 + i).padStart(2, '0')}:00`) });
   assert.equal(many.status, 400, 'more than 200 showings in one go is refused');
   assert.equal((await post({ movie: String(movie._id).replace(/./, '0') })).status, 400, 'an unknown movie is a 400, not a skipped slot');
+  addMovie({ title: 'Retired', status: 'archived' });
+  assert.equal((await post({ movie: String(movies[1]._id) })).status, 400, 'an archived movie cannot be scheduled');
   addMovie({ title: 'Draft', status: 'draft' });
-  assert.equal((await post({ movie: String(movies[1]._id) })).status, 400, 'only published movies can be scheduled');
+  assert.equal((await post({ movie: String(movies[2]._id), dryRun: true })).status, 200, 'a draft movie can');
 });
 
 test('bulk: a clash fails the whole request unless skipConflicts is set', async () => {

@@ -486,7 +486,7 @@ async function main() {
     await check('admin can create a movie; it starts as a draft; unknown fields are ignored', async () => {
       const res = await api('POST', '/admin/movies', {
         session: adminSession,
-        body: { ...testMovie('crud'), isFeatured: true, _id: '000000000000000000000001' },
+        body: { ...testMovie('crud', { releaseDate: '2099-01-01' }), isFeatured: true, _id: '000000000000000000000001' }, // coming soon, so it may be published without showings
       });
       expectStatus(res, 201);
       movie = res.data;
@@ -511,6 +511,15 @@ async function main() {
       assert(bySearch.data.some((m) => m._id === movie._id), 'search did not find the published movie');
       const byGenre = await api('GET', `/movies?genre=${encodeURIComponent(movie.genre.toLowerCase())}`);
       assert(byGenre.data.some((m) => m._id === movie._id), 'genre filter did not find the published movie');
+    });
+    await check('a released movie cannot be published until it has a showing customers can book', async () => {
+      const draft = await api('POST', '/admin/movies', { session: adminSession, body: testMovie('released draft') });
+      expectStatus(draft, 201);
+      const refused = await api('PATCH', `/admin/movies/${draft.data._id}`, { session: adminSession, body: { status: 'published' } });
+      expectStatus(refused, 409);
+      assert(/Schedule at least one showing/.test(refused.data.message), `the message was: ${refused.data.message}`);
+      expectStatus(await api('POST', '/admin/movies', { session: adminSession, body: testMovie('released published', { status: 'published' }) }), 409, 'created as published');
+      expectStatus(await api('DELETE', `/movies/${draft.data._id}`, { session: adminSession }), 200, 'clean up');
     });
     await check('the public list only ever contains published movies', async () => {
       const list = await api('GET', '/movies');
@@ -550,7 +559,8 @@ async function main() {
     let reservation = null;
     await check('admin creates a published movie and an auditorium; the server makes the seat labels', async () => {
       const movieRes = await api('POST', '/admin/movies', {
-        session: adminSession, body: testMovie('showtimes', { status: 'published' }),
+        // Released the day before the first showing below: a coming-soon movie may be published without showings.
+        session: adminSession, body: testMovie('showtimes', { status: 'published', releaseDate: new Date(Date.now() + 2 * DAY_MS).toISOString().slice(0, 10) }),
       });
       expectStatus(movieRes, 201);
       film = movieRes.data;

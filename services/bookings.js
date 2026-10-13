@@ -101,6 +101,10 @@ async function createBooking(userId, body) {
           throw new HttpError(409, `Online booking for this showtime closed ${salesCutoffMinutes} minutes before it starts`);
         }
 
+        // Showings of a movie that is not published yet are invisible to customers.
+        const movie = await Movie.findById(showtime.movie).session(session);
+        if (!movie || movie.status !== 'published') throw new HttpError(404, 'Showtime not found');
+
         const auditorium = await Auditorium.findById(showtime.auditorium).session(session);
         if (!auditorium) throw new HttpError(409, 'This showtime has no auditorium');
         const known = new Set(auditorium.seatLabels);
