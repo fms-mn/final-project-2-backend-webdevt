@@ -236,6 +236,7 @@ async function describeBookings(bookings, { admin = false } = {}) {
       paymentStatus: booking.paymentStatus || (booking.status === 'confirmed' ? 'paid' : null),
       holdExpiresAt: booking.status === 'pending' ? booking.holdExpiresAt : null,
       payment: payments.publicPayment(paymentByBooking.get(idOf(booking))),
+      paymentMode: payments.PAYMENT_MODE,
       showtime: showtime
         ? {
           _id: showtime._id,

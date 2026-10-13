@@ -174,6 +174,9 @@ test('card: a successful payment confirms the booking and records the payment', 
   assert.equal(done.status, 200);
   assert.equal(done.data.booking.status, 'confirmed');
   assert.equal(done.data.booking.paymentStatus, 'paid');
+  assert.equal(held.paymentMode, 'simulated');
+  assert.equal(done.data.booking.paymentMode, 'simulated');
+  assert.equal(done.data.booking.payment.mode, 'simulated');
   assert.equal(done.data.booking.holdExpiresAt, null);
   assert.equal(done.data.booking.payment.method, 'card');
   assert.equal(done.data.booking.payment.cardBrand, 'Visa');
@@ -255,6 +258,8 @@ test('wallet: the payment waits for approval, and declining keeps the hold', asy
   assert.equal(start.data.awaitingApproval, true);
   assert.equal(start.data.payment.status, 'awaiting_approval');
   assert.equal(start.data.payment.walletLast4, '4567');
+  assert.equal(start.data.payment.mode, 'simulated');
+  assert.ok(!JSON.stringify(payments).includes('09171234567') && !JSON.stringify(payments).includes('0917 123 4567'), 'the wallet number is never stored');
   assert.equal(bookings[0].status, 'pending', 'not confirmed until approved');
   const paymentId = start.data.payment._id;
 
