@@ -306,12 +306,20 @@ async function main() {
 
     await check('payments: cancelling a showing refunds its paid bookings and releases unpaid holds', async () => {
       const showtime = await newShowtime();
-      const paidOne = (await book(customers[4], showtime, ['F1'])).data;
-      await pay(customers[4], paidOne);
+      const heldOne = await book(customers[4], showtime, ['F1']);
+      assert(heldOne.status === 201, `booking F1 gave ${heldOne.status} ${JSON.stringify(heldOne.data)}`);
+      const paidOne = heldOne.data;
+      const paidAnswer = await pay(customers[4], paidOne);
+      assert(paidAnswer.status === 200, `paying F1 gave ${paidAnswer.status} ${JSON.stringify(paidAnswer.data)}`);
       const unpaid = (await book(customers[5], showtime, ['F2'])).data;
       const cancelled = await api('PATCH', `/showtimes/${showtime._id}/cancel`, { session: admin });
       assert(cancelled.status === 200, `cancel gave ${cancelled.status}`);
-      assert(await Payment.countDocuments({ booking: paidOne._id, status: 'refunded' }) === 1, 'the paid booking was not refunded');
+      const after = await Booking.findById(paidOne._id);
+      const payments = await Payment.find({ booking: paidOne._id });
+      assert(
+        payments.filter((p) => p.status === 'refunded').length === 1,
+        `the paid booking was not refunded (booking ${after.status}/${after.paymentStatus}, payments ${payments.map((p) => p.status).join() || 'none'}, cancel said ${JSON.stringify(cancelled.data)})`,
+      );
       assert((await Booking.findById(unpaid._id)).status === 'expired', 'the unpaid hold was not released');
       assert(await claimsOf(showtime) === 0, 'seats are still claimed');
     });
