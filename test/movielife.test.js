@@ -5,6 +5,7 @@
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'offline-test-secret-offline-test-secret';
 process.env.BOOKING_RETRY_PAUSE_MS = '1';
+process.env.PAYMENT_REQUIRED = 'false'; // these tests are about movies and showings (see payments.test.js)
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,6 +17,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const Payment = require('../models/Payment');
 const Setting = require('../models/Setting');
 const LoginAttempt = require('../models/LoginAttempt');
 const { atManila, manilaClock, manilaDay } = require('../utils/manila');
@@ -33,13 +35,14 @@ const auditoriums = [];
 const showtimes = [];
 const bookings = [];
 const claims = [];
+const payments = [];
 const settings = [];
 let server;
 let base;
 let passwordHash;
 let transactionHook = null;
 
-const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings].forEach((rows) => { rows.length = 0; });
+const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings, payments].forEach((rows) => { rows.length = 0; });
 const day = (n) => manilaDay(Date.now() + n * DAY); // a Manila calendar day, n days from today
 
 function add(Model, rows, fields) {
@@ -96,10 +99,11 @@ test.before(async () => {
   fakeModel(Showtime, showtimes);
   fakeModel(Booking, bookings, { uniqueOn: 'bookingCode' });
   fakeModel(SeatClaim, claims, { uniqueOn: ['showtime', 'seatLabel'] });
+  fakeModel(Payment, payments, { uniqueOn: 'reference' });
   fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
   fakeTransactions({
-    stores: [bookings, claims, showtimes, auditoriums, settings],
+    stores: [bookings, claims, showtimes, auditoriums, settings, payments],
     beforeAttempt: (attempt) => (transactionHook ? transactionHook(attempt) : false),
   });
   server = await new Promise((resolve) => { const s = createApp().listen(0, () => resolve(s)); });

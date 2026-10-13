@@ -37,11 +37,20 @@ const bookingSchema = new mongoose.Schema(
       min: [0, 'totalAmount cannot be negative'],
       validate: integer,
     },
+    // pending   seats are held while the customer pays (see holdExpiresAt)
+    // confirmed paid (or booked with payments switched off)
+    // cancelled cancelled after confirming
+    // expired   the hold ran out, was given up or was replaced: the seats went back on sale
     status: {
       type: String,
-      enum: ['confirmed', 'cancelled'],
+      enum: ['pending', 'confirmed', 'cancelled', 'expired'],
       default: 'confirmed',
     },
+    // While status is pending: when the held seats are released if the payment is not completed.
+    holdExpiresAt: { type: Date },
+    // unpaid -> paid -> refunded. Bookings made before payments existed have no value; they count
+    // as paid.
+    paymentStatus: { type: String, enum: ['unpaid', 'paid', 'refunded'] },
     bookedAt: { type: Date, required: true, default: Date.now },
     cancelledAt: { type: Date, default: null },
   },
@@ -62,5 +71,6 @@ bookingSchema.statics.generateCode = generateBookingCode;
 
 bookingSchema.index({ user: 1, bookedAt: -1 });
 bookingSchema.index({ showtime: 1, status: 1 });
+bookingSchema.index({ status: 1, holdExpiresAt: 1 });
 
 module.exports = mongoose.model('Booking', bookingSchema);

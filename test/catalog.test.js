@@ -15,6 +15,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const Payment = require('../models/Payment');
 const Setting = require('../models/Setting');
 const LoginAttempt = require('../models/LoginAttempt');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
@@ -30,13 +31,14 @@ const auditoriums = [];
 const showtimes = [];
 const bookings = [];
 const claims = [];
+const payments = [];
 const settings = [];
 let server;
 let base;
 let passwordHash;
 let transactionHook = null;
 
-const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings].forEach((rows) => { rows.length = 0; });
+const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings, payments].forEach((rows) => { rows.length = 0; });
 // One fixed starting point, so back-to-back showtimes line up to the millisecond.
 const T0 = Date.now();
 const inFuture = (ms) => new Date(T0 + ms);
@@ -113,6 +115,7 @@ test.before(async () => {
   fakeModel(Showtime, showtimes);
   fakeModel(Booking, bookings);
   fakeModel(SeatClaim, claims);
+  fakeModel(Payment, payments, { uniqueOn: 'reference' });
   fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
   fakeTransactions({ beforeAttempt: (attempt) => (transactionHook ? transactionHook(attempt) : false) });
