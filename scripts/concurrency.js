@@ -306,12 +306,12 @@ async function main() {
 
     await check('payments: cancelling a showing refunds its paid bookings and releases unpaid holds', async () => {
       const showtime = await newShowtime();
-      const heldOne = await book(customers[4], showtime, ['F1']);
-      assert(heldOne.status === 201, `booking F1 gave ${heldOne.status} ${JSON.stringify(heldOne.data)}`);
+      const heldOne = await book(customers[4], showtime, ['A1']);
+      assert(heldOne.status === 201, `booking A1 gave ${heldOne.status} ${JSON.stringify(heldOne.data)}`);
       const paidOne = heldOne.data;
       const paidAnswer = await pay(customers[4], paidOne);
-      assert(paidAnswer.status === 200, `paying F1 gave ${paidAnswer.status} ${JSON.stringify(paidAnswer.data)}`);
-      const unpaid = (await book(customers[5], showtime, ['F2'])).data;
+      assert(paidAnswer.status === 200, `paying A1 gave ${paidAnswer.status} ${JSON.stringify(paidAnswer.data)}`);
+      const unpaid = (await book(customers[5], showtime, ['A2'])).data;
       const cancelled = await api('PATCH', `/showtimes/${showtime._id}/cancel`, { session: admin });
       assert(cancelled.status === 200, `cancel gave ${cancelled.status}`);
       const after = await Booking.findById(paidOne._id);
