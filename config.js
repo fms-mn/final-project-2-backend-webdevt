@@ -50,4 +50,16 @@ module.exports = {
   // Failed sign-ins allowed per IP + email within the window. A whole IP gets five times as many.
   loginRateMax: positiveNumber(process.env.LOGIN_RATE_MAX, 5),
   loginRateWindowMs: positiveNumber(process.env.LOGIN_RATE_WINDOW_MINUTES, 15) * 60 * 1000,
+
+  // Payments are simulated by services/payments.js (no real money moves). These are read each time
+  // they are used, so they can be changed by an environment variable without restarting code paths.
+  //   PAYMENT_REQUIRED=false  bookings confirm immediately, with no payment step
+  //   HOLD_MINUTES            how long chosen seats are held while the customer pays (default 5)
+  //   PAYMENT_DELAY_MS        pretend processing time of the simulated gateway (default 900)
+  get paymentRequired() { return process.env.PAYMENT_REQUIRED !== 'false'; },
+  get holdMinutes() { return positiveNumber(process.env.HOLD_MINUTES, 5); },
+  get paymentDelayMs() {
+    const value = Number(process.env.PAYMENT_DELAY_MS);
+    return process.env.PAYMENT_DELAY_MS !== undefined && Number.isFinite(value) && value >= 0 ? value : 900;
+  },
 };

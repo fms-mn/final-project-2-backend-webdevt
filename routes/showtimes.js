@@ -3,11 +3,13 @@ const Movie = require('../models/Movie');
 const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const SeatClaim = require('../models/SeatClaim');
+const Booking = require('../models/Booking');
 const { adminAuth } = require('../middleware/auth');
 const { HttpError, wrap } = require('../utils/http');
 const { isObjectId, requireId, dayRange, badRequest } = require('../utils/validate');
 const service = require('../services/showtimes');
 const scheduling = require('../services/scheduling');
+const payments = require('../services/payments');
 const { getSettings } = require('../services/settings');
 
 const router = express.Router();
@@ -51,14 +53,17 @@ router.get('/:id/seats', wrap(async (req, res) => {
   requireId(req.params.id, 'Showtime');
   const showtime = await Showtime.findById(req.params.id);
   if (!showtime || showtime.status !== 'scheduled' || showtime.isPublished === false) throw new HttpError(404, 'Showtime not found');
-  const [movie, auditorium, claims] = await Promise.all([
+  await payments.expireHolds({ showtimeId: showtime._id }); // seats whose hold ran out are free again
+  const [movie, auditorium, claims, holds] = await Promise.all([
     Movie.findById(showtime.movie),
     Auditorium.findById(showtime.auditorium),
     SeatClaim.find({ showtime: showtime._id }).select('seatLabel'),
+    Booking.find({ showtime: showtime._id, status: 'pending' }).select('seats'),
   ]);
   if (!movie || movie.status !== 'published' || !auditorium) throw new HttpError(404, 'Showtime not found');
 
   const taken = new Set(claims.map((claim) => claim.seatLabel));
+  const held = new Set(holds.flatMap((hold) => hold.seats)); // chosen by someone who is paying right now
   const blocked = service.blockedSet(auditorium, showtime);
   const { salesCutoffMinutes } = await getSettings();
   res.json({
@@ -72,7 +77,7 @@ router.get('/:id/seats', wrap(async (req, res) => {
     auditorium: { _id: auditorium._id, name: auditorium.name, rows: auditorium.rows, seatsPerRow: auditorium.seatsPerRow },
     seats: auditorium.seatLabels.map((label) => ({
       label,
-      status: blocked.has(label) ? 'blocked' : taken.has(label) ? 'booked' : 'available',
+      status: blocked.has(label) ? 'blocked' : held.has(label) ? 'held' : taken.has(label) ? 'booked' : 'available',
     })),
   });
 }));

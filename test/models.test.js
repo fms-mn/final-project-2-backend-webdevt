@@ -141,7 +141,7 @@ test('Booking: required fields, defaults, empty and duplicate seats, totals', as
   assert.deepEqual(await failedPaths(new Booking({ ...base, seats: ['A1', 'A1'] })), ['seats']);
   assert.deepEqual(await failedPaths(new Booking({ ...base, seats: ['A1', ' '], totalAmount: 80000 })), ['seats']);
   assert.deepEqual(await failedPaths(new Booking({ ...base, totalAmount: 1 })), ['totalAmount']);
-  assert.deepEqual(await failedPaths(new Booking({ ...base, status: 'pending' })), ['status']);
+  assert.deepEqual(await failedPaths(new Booking({ ...base, status: 'refunded' })), ['status']);
 });
 
 test('Booking: generated codes look right and do not repeat', () => {

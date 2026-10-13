@@ -258,7 +258,9 @@ async function main() {
   const serverLog = [];
   const server = spawn(process.execPath, [script('index.js')], {
     cwd: SERVER_DIR,
-    env: { ...process.env, PORT },
+    // The booking checks below are about seats and transactions, so bookings confirm at once here.
+    // Payments have their own checks in `npm run concurrency` and the offline tests.
+    env: { ...process.env, PORT, PAYMENT_REQUIRED: 'false' },
   });
   server.stdout.on('data', (chunk) => serverLog.push(chunk.toString()));
   server.stderr.on('data', (chunk) => serverLog.push(chunk.toString()));
