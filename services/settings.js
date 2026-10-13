@@ -2,11 +2,13 @@ const Setting = require('../models/Setting');
 const { collectErrors } = require('../utils/validate');
 
 const KEY = 'cinema';
-const DEFAULTS = { turnaroundMinutes: 15, salesCutoffMinutes: 15 };
+const DEFAULTS = { turnaroundMinutes: 15, salesCutoffMinutes: 15, autoArchiveDays: 30 };
 const FIELDS = Object.keys(DEFAULTS);
-const LIMITS = { turnaroundMinutes: 240, salesCutoffMinutes: 1440 };
+const LIMITS = { turnaroundMinutes: 240, salesCutoffMinutes: 1440, autoArchiveDays: 3650 };
+const UNITS = { turnaroundMinutes: 'minutes', salesCutoffMinutes: 'minutes', autoArchiveDays: 'days' };
 
-const pick = (doc) => Object.fromEntries(FIELDS.map((field) => [field, doc ? doc[field] : DEFAULTS[field]]));
+// A rule saved before it existed has no value; it falls back to the default.
+const pick = (doc) => Object.fromEntries(FIELDS.map((field) => [field, doc && doc[field] !== undefined && doc[field] !== null ? doc[field] : DEFAULTS[field]]));
 
 // The rules in force: what the admin saved, or the defaults when nothing was saved yet.
 async function getSettings(session) {
@@ -22,7 +24,7 @@ async function updateSettings(body = {}) {
       if (body[field] === undefined) continue;
       const value = body[field];
       if (!Number.isInteger(value) || value < 0 || value > LIMITS[field]) {
-        fail(field, `${field} must be a whole number of minutes from 0 to ${LIMITS[field]}`);
+        fail(field, `${field} must be a whole number of ${UNITS[field]} from 0 to ${LIMITS[field]}`);
       } else {
         found[field] = value;
       }

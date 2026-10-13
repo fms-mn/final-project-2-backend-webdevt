@@ -52,6 +52,13 @@ mongoose
     // Seats held for an unpaid booking go back on sale when the hold runs out. They are also
     // released whenever seats are shown or booked; this timer just keeps the database tidy.
     const { expireHolds } = require('./services/payments');
+    // Released movies that have had no showings for a while are archived (see services/movieArchive.js
+    // and the "Archive quiet movies" rule in the admin Settings). Checked an hour after start, then hourly.
+    const { archiveStaleMovies } = require('./services/movieArchive');
+    const sweepMovies = () => archiveStaleMovies()
+      .then(({ archived }) => { if (archived.length) console.log(`Archived ${archived.length} quiet movie(s): ${archived.map((movie) => movie.title).join(', ')}`); })
+      .catch((error) => console.error('Archiving quiet movies failed:', error.message));
+    setTimeout(() => { sweepMovies(); setInterval(sweepMovies, 60 * 60 * 1000).unref(); }, 60 * 60 * 1000).unref();
     setInterval(() => { expireHolds().catch((error) => console.error('Releasing holds failed:', error.message)); }, 30 * 1000).unref();
   })
   .catch((err) => {

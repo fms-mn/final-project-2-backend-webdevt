@@ -119,14 +119,14 @@ test('settings: defaults, admin only, validated, and saved', async () => {
   assert.equal((await call('GET', '/api/admin/settings', { session: customer })).status, 403);
   assert.equal((await setRules(customer, { turnaroundMinutes: 5 })).status, 403);
 
-  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 15, salesCutoffMinutes: 15 });
-  for (const bad of [{ turnaroundMinutes: -1 }, { turnaroundMinutes: 1.5 }, { salesCutoffMinutes: 'soon' }, { salesCutoffMinutes: 5000 }, { turnaroundMinutes: 241 }, {}, { nonsense: 1 }]) {
+  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 15, salesCutoffMinutes: 15, autoArchiveDays: 30 });
+  for (const bad of [{ turnaroundMinutes: -1 }, { turnaroundMinutes: 1.5 }, { salesCutoffMinutes: 'soon' }, { salesCutoffMinutes: 5000 }, { turnaroundMinutes: 241 }, { autoArchiveDays: -1 }, { autoArchiveDays: 4000 }, {}, { nonsense: 1 }]) {
     assert.equal((await setRules(admin, bad)).status, 400, JSON.stringify(bad));
   }
   const saved = await setRules(admin, { turnaroundMinutes: 30 });
-  assert.deepEqual(saved.data, { turnaroundMinutes: 30, salesCutoffMinutes: 15 }, 'the other rule keeps its value');
+  assert.deepEqual(saved.data, { turnaroundMinutes: 30, salesCutoffMinutes: 15, autoArchiveDays: 30 }, 'the other rules keep their values');
   await setRules(admin, { salesCutoffMinutes: 0 });
-  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 30, salesCutoffMinutes: 0 });
+  assert.deepEqual((await call('GET', '/api/admin/settings', { session: admin })).data, { turnaroundMinutes: 30, salesCutoffMinutes: 0, autoArchiveDays: 30 });
   assert.equal(settings.length, 1, 'one settings record, however often it is saved');
 });
 

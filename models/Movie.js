@@ -32,6 +32,9 @@ const movieSchema = new mongoose.Schema(
       set: (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
       validate: youtubeLink,
     },
+    // Set when the system archived this movie because it had no showings for too long. Cleared
+    // whenever an admin changes the status.
+    autoArchivedAt: { type: Date },
     // Only published movies appear in public listings.
     status: {
       type: String,
