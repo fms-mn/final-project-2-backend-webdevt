@@ -11,6 +11,7 @@ const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
 const config = require('../config');
 const { getSettings } = require('./settings');
 const payments = require('./payments');
+const { cancellationInfo } = require('./cancellationInfo');
 
 const MAX_SEATS_PER_BOOKING = 10;
 // Transient conflicts (another booking, cancellation or edit on the same showtime committed first)
@@ -237,6 +238,7 @@ async function describeBookings(bookings, { admin = false } = {}) {
       holdExpiresAt: booking.status === 'pending' ? booking.holdExpiresAt : null,
       payment: payments.publicPayment(paymentByBooking.get(idOf(booking))),
       paymentMode: payments.PAYMENT_MODE,
+      cancellation: cancellationInfo(booking, showtime, paymentByBooking.get(idOf(booking))),
       showtime: showtime
         ? {
           _id: showtime._id,
