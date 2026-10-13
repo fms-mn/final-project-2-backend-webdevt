@@ -40,7 +40,10 @@ const errorHandler = (err, req, res, next) => {
     return res.status(409).json({ message: 'That record already exists' });
   }
 
-  if (process.env.NODE_ENV !== 'test') console.error(err);
+  if (process.env.NODE_ENV !== 'test') {
+    const paymentRequest = /^\/api\/(bookings\/[^/]+\/pay|payments\/[^/]+\/authorize)(\?|$)/.test(req.originalUrl);
+    console.error(paymentRequest ? { message: 'Payment request failed', name: err.name } : err);
+  }
   return res.status(500).json({ message: 'Server error' });
 };
 

@@ -3,6 +3,7 @@ const Showtime = require('../models/Showtime');
 const SeatClaim = require('../models/SeatClaim');
 const Payment = require('../models/Payment');
 const config = require('../config');
+const PAYMENT_MODE = 'simulated';
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { badRequest, collectErrors } = require('../utils/validate');
@@ -101,6 +102,7 @@ function publicPayment(payment) {
   if (!payment) return null;
   return {
     _id: payment._id,
+    mode: PAYMENT_MODE,
     reference: payment.reference,
     method: payment.method,
     status: payment.status,
@@ -295,6 +297,7 @@ async function refundBooking(booking, now, session) {
 }
 
 module.exports = {
+  PAYMENT_MODE,
   startPayment,
   authorizeWallet,
   settlePaid,

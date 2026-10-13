@@ -176,6 +176,9 @@ test('card: a successful payment confirms the booking and records the payment', 
   assert.equal(done.status, 200);
   assert.equal(done.data.booking.status, 'confirmed');
   assert.equal(done.data.booking.paymentStatus, 'paid');
+  assert.equal(held.paymentMode, 'simulated');
+  assert.equal(done.data.booking.paymentMode, 'simulated');
+  assert.equal(done.data.booking.payment.mode, 'simulated');
   assert.equal(done.data.booking.holdExpiresAt, null);
   assert.equal(done.data.booking.payment.method, 'card');
   assert.equal(done.data.booking.payment.cardBrand, 'Visa');
@@ -257,6 +260,8 @@ test('wallet: the payment waits for approval, and declining keeps the hold', asy
   assert.equal(start.data.awaitingApproval, true);
   assert.equal(start.data.payment.status, 'awaiting_approval');
   assert.equal(start.data.payment.walletLast4, '4567');
+  assert.equal(start.data.payment.mode, 'simulated');
+  assert.ok(!JSON.stringify(payments).includes('09171234567') && !JSON.stringify(payments).includes('0917 123 4567'), 'the wallet number is never stored');
   assert.equal(bookings[0].status, 'pending', 'not confirmed until approved');
   const paymentId = start.data.payment._id;
 
@@ -351,15 +356,39 @@ test('security: only the owner can pay, and only signed-in customers', async () 
 });
 
 // ---- 6. refunds ----------------------------------------------------------------------------
+test('refund failure rolls back cancellation and seat release', async () => {
+  const { show, ann } = await setup();
+  const held = (await hold(ann, show, ['A1'])).data;
+  await pay(ann, held, VISA);
+  const originalSave = Payment.prototype.save;
+  try {
+    Payment.prototype.save = async function(options) {
+      if (this.status === 'refunded') throw new Error('Simulated refund could not be recorded');
+      return originalSave.call(this, options);
+    };
+    const result = await call('PATCH', `/api/bookings/${held._id}/cancel`, { session: ann });
+    assert.equal(result.status, 500);
+    assert.equal(bookings[0].status, 'confirmed');
+    assert.equal(payments[0].status, 'paid');
+    assert.equal(statusOf(await seatMap(show), 'A1'), 'booked');
+  } finally { Payment.prototype.save = originalSave; }
+});
+
 test('refund: cancelling a paid booking refunds the payment and frees the seats', async () => {
   const { show, ann } = await setup();
   const held = (await hold(ann, show, ['A1', 'A2'])).data;
   await pay(ann, held, VISA);
+  const preview = (await call('GET', `/api/bookings/${held._id}`, { session: ann })).data.cancellation;
+  assert.equal(preview.refund.status, 'available');
+  assert.equal(preview.refund.amount, 80000);
   const cancelled = await call('PATCH', `/api/bookings/${held._id}/cancel`, { session: ann });
   assert.equal(cancelled.status, 200);
   assert.equal(cancelled.data.status, 'cancelled');
   assert.equal(cancelled.data.paymentStatus, 'refunded');
   assert.equal(cancelled.data.payment.status, 'refunded');
+  assert.equal(cancelled.data.cancellation.refund.status, 'refunded');
+  assert.equal(cancelled.data.cancellation.refund.amount, preview.refund.amount);
+  assert.equal(cancelled.data.cancellation.refund.reference, cancelled.data.payment.refundReference);
   assert.match(cancelled.data.payment.refundReference, /^RF-[A-Z0-9]{8}$/);
   assert.ok(cancelled.data.payment.refundedAt);
   assert.equal(claims.length, 0);

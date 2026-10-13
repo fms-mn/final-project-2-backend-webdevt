@@ -39,7 +39,7 @@ router.post('/', auth, wrap(async (req, res) => {
 router.get('/my', auth, wrap(async (req, res) => {
   const { limit, page } = pageOptions(req.query);
   const bookings = await Booking.find({ user: req.user._id, ...statusFilter(req.query) })
-    .sort({ bookedAt: -1 }).skip((page - 1) * limit).limit(limit);
+    .sort({ bookedAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit);
   res.json(await service.describeBookings(bookings));
 }));
 
