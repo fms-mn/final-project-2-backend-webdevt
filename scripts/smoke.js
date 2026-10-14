@@ -24,6 +24,7 @@ const Auditorium = require('../models/Auditorium');
 const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
+const { getSettings } = require('../services/settings');
 
 const PORT = process.env.SMOKE_PORT || '5099';
 const BASE = `http://127.0.0.1:${PORT}/api`;
@@ -591,13 +592,18 @@ async function main() {
       expectStatus(await api('POST', '/showtimes', { session: sessionA, body: bad }), 403, 'customer');
     });
     if (!slot) return;
-    await check('overlapping showtimes are 409; back-to-back is allowed', async () => {
+    await check('overlapping showtimes are 409; the configured turnaround is enforced', async () => {
       const same = { movie: film._id, auditorium: hall._id, ticketPrice: 40000 };
       expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...same, startTime: slot.startTime } }), 409, 'identical');
       expectStatus(await api('POST', '/showtimes', {
         session: adminSession, body: { ...same, startTime: new Date(new Date(slot.startTime).getTime() + 30 * 60 * 1000).toISOString() },
       }), 409, 'starts inside');
-      expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...same, startTime: slot.endTime } }), 201, 'back to back');
+      const { turnaroundMinutes } = await getSettings();
+      if (turnaroundMinutes > 0) {
+        expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...same, startTime: slot.endTime } }), 409, 'no turnaround');
+      }
+      const nextStart = new Date(new Date(slot.endTime).getTime() + turnaroundMinutes * 60000).toISOString();
+      expectStatus(await api('POST', '/showtimes', { session: adminSession, body: { ...same, startTime: nextStart } }), 201, 'configured turnaround');
     });
     await check('five admins creating the same slot at once: exactly one wins, the rest get 409', async () => {
       const body = { movie: film._id, auditorium: hall._id, startTime: iso(6 * DAY_MS), ticketPrice: 40000 };

@@ -12,6 +12,7 @@ const config = require('../config');
 const { getSettings } = require('./settings');
 const payments = require('./payments');
 const { cancellationInfo } = require('./cancellationInfo');
+const { admitBooking } = require('./bookingAdmission');
 
 const MAX_SEATS_PER_BOOKING = 10;
 // Transient conflicts (another booking, cancellation or edit on the same showtime committed first)
@@ -72,6 +73,10 @@ const isDuplicateKey = (error) => Boolean(error) && error.code === 11000;
 // unpaid hold expires and the seats go back on sale. With PAYMENT_REQUIRED=false it confirms at once.
 async function createBooking(userId, body) {
   const input = readInput(body);
+  return admitBooking(input.showtime, () => reserveSeats(userId, input));
+}
+
+async function reserveSeats(userId, input) {
   // Seats whose hold has run out, and this customer's own earlier unpaid hold, must not block them.
   await payments.expireHolds({ showtimeId: input.showtime });
   await payments.releaseUserHolds(userId, input.showtime);
