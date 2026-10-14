@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
+const passwords = require('../services/passwords');
 
 const MIN_PASSWORD_LENGTH = 8;
 // bcrypt only uses the first 72 bytes of its input, so longer passwords are rejected.
@@ -64,11 +64,11 @@ userSchema.statics.validatePassword = function validatePassword(password) {
 };
 
 userSchema.statics.hashPassword = function hashPassword(password) {
-  return bcrypt.hash(password, 12);
+  return passwords.hashPassword(password);
 };
 
 userSchema.methods.comparePassword = function comparePassword(candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.passwordHash);
+  return passwords.comparePassword(candidatePassword, this.passwordHash);
 };
 
 module.exports = mongoose.model('User', userSchema);

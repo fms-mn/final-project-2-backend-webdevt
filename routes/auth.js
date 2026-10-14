@@ -1,5 +1,5 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
+const passwords = require('../services/passwords');
 const config = require('../config');
 const User = require('../models/User');
 const { startSession, endSession } = require('../middleware/auth');
@@ -17,8 +17,8 @@ const failuresByIp = createRateLimiter({ ...limits, name: 'ip', max: config.logi
 // about as long and cannot be told apart by timing.
 let dummyHash;
 const unknownUserCompare = async (password) => {
-  dummyHash = dummyHash || await bcrypt.hash('not-a-real-password', 12);
-  await bcrypt.compare(password, dummyHash);
+  dummyHash ||= passwords.hashPassword('not-a-real-password').catch(error => { dummyHash = undefined; throw error; });
+  await passwords.comparePassword(password, await dummyHash);
 };
 
 // Register
