@@ -43,24 +43,30 @@ router.get('/my', auth, wrap(async (req, res) => {
   res.json(await service.describeBookings(bookings));
 }));
 
-// Admin: every booking. Filters: status, showtime (id), date (the showtime's day in Asia/Manila).
+// Admin: every booking. Filters: status, showtime (id), movie (id), date (the showtime's day in Asia/Manila).
 router.get('/', adminAuth, wrap(async (req, res) => {
   const filter = statusFilter(req.query, { allowed: ALL_STATUSES, fallback: ['pending', 'confirmed', 'cancelled'] });
-  const { showtime, date } = req.query;
+  const { showtime, date, movie } = req.query;
   if (showtime !== undefined && !isObjectId(showtime)) throw badRequest({ showtime: 'showtime must be a showtime id' });
+  if (movie !== undefined && !isObjectId(movie)) throw badRequest({ movie: 'movie must be a movie id' });
+  let range = null;
   if (date !== undefined) {
-    const range = dayRange(date);
+    range = dayRange(date);
     if (!range) throw badRequest({ date: 'date must look like 2026-10-31' });
-    const onThatDay = await Showtime.find({
-      startTime: { $gte: range.start, $lt: range.end },
+  }
+  if (range || movie) {
+    // The showings that match every filter given; bookings are the ones on those showings.
+    const matching = await Showtime.find({
+      ...(range ? { startTime: { $gte: range.start, $lt: range.end } } : {}),
       ...(showtime ? { _id: showtime } : {}),
+      ...(movie ? { movie } : {}),
     });
-    filter.showtime = { $in: onThatDay.map((s) => s._id) };
+    filter.showtime = { $in: matching.map((s) => s._id) };
   } else if (showtime) {
     filter.showtime = showtime;
   }
   const { limit, page } = pageOptions(req.query);
-  const bookings = await Booking.find(filter).sort({ bookedAt: -1 }).skip((page - 1) * limit).limit(limit);
+  const bookings = await Booking.find(filter).sort({ bookedAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit);
   res.json(await service.describeBookings(bookings, { admin: true }));
 }));
 
