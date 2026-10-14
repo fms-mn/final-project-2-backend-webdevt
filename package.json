@@ -16,6 +16,8 @@
     "db:reset": "node scripts/reset-dev-db.js",
     "test": "node --test",
     "db:reset:confirm": "node scripts/reset-dev-db.js --yes",
+    "clear-movies": "node scripts/clear-movies.js",
+    "clear-movies:confirm": "node scripts/clear-movies.js --yes",
     "concurrency": "node scripts/concurrency.js"
   },
   "dependencies": {
