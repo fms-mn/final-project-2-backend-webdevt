@@ -7,6 +7,7 @@ const Booking = require('../models/Booking');
 const { requireId, badRequest } = require('../utils/validate');
 const { cancelShowtime } = require('../services/showtimes');
 const { withShowingInfo } = require('../services/movieShowings');
+const { salesByMovie, movieSummary, emptySales } = require('../services/movieSales');
 const { assertCanPublish } = require('../services/moviePublishing');
 const { staleMovies, archiveStaleMovies, describeCandidates } = require('../services/movieArchive');
 const { manilaDay, manilaLabel, manilaDateLabel } = require('../utils/manila');
@@ -35,7 +36,20 @@ router.get('/', adminAuth, wrap(async (req, res) => {
     filter.status = req.query.status;
   }
   const movies = await Movie.find(filter).sort({ createdAt: -1 });
-  res.json(await withShowingInfo(movies.map((movie) => movie.toJSON())));
+  const [withShowings, sales] = await Promise.all([
+    withShowingInfo(movies.map((movie) => movie.toJSON())),
+    salesByMovie(movies.map((movie) => movie._id)),
+  ]);
+  // Each movie also carries what it has earned, so the list can show revenue without more requests.
+  res.json(withShowings.map((movie) => ({ ...movie, sales: sales.get(String(movie._id)) || emptySales() })));
+}));
+
+// One movie's panel: sales (revenue, tickets, refunds), showing counts and how full its showings are.
+router.get('/:id/summary', adminAuth, wrap(async (req, res) => {
+  requireId(req.params.id, 'Movie');
+  const movie = await Movie.findById(req.params.id);
+  if (!movie) throw new HttpError(404, 'Movie not found');
+  res.json(await movieSummary(movie));
 }));
 
 router.post('/', adminAuth, wrap(async (req, res) => {
