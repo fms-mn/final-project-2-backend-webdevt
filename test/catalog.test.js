@@ -213,20 +213,36 @@ test('admin movies: updates re-validate; archive and duration are guarded by upc
   assert.equal((await patch(movie._id, { status: 'archived' })).status, 200);
 });
 
-test('delete movie: only when no showtime ever used it', async () => {
-  const used = addMovie({ title: 'Used' });
-  const free = addMovie({ title: 'Free' });
+test('delete movie: gone unless customers hold tickets or coming showings exist', async () => {
   const hall = addAuditorium();
-  addShowtime(used, hall, -DAY, { status: 'cancelled' });
+  const booked = addMovie({ title: 'Booked' });
+  const upcoming = addMovie({ title: 'Upcoming' });
+  const past = addMovie({ title: 'Past, never booked' });
+  const free = addMovie({ title: 'Free' });
+  const pastShow = addShowtime(booked, hall, -2 * DAY, { status: 'cancelled' });
+  addBooking(pastShow, { status: 'cancelled' });
+  addShowtime(upcoming, hall, DAY);
+  addShowtime(past, hall, -3 * DAY);
+  addShowtime(past, hall, -2 * DAY, { status: 'cancelled' });
   const user = await signIn('user');
   const admin = await signIn('admin');
 
   assert.equal((await call('DELETE', `/api/movies/${free._id}`)).status, 401);
   assert.equal((await call('DELETE', `/api/movies/${free._id}`, { session: user })).status, 403);
-  assert.equal((await call('DELETE', `/api/movies/${used._id}`, { session: admin })).status, 409);
-  assert.equal(movies.includes(used), true);
+
+  const withTickets = await call('DELETE', `/api/movies/${booked._id}`, { session: admin });
+  assert.equal(withTickets.status, 409);
+  assert.match(withTickets.data.message, /ticket history/);
+  const withComing = await call('DELETE', `/api/movies/${upcoming._id}`, { session: admin });
+  assert.equal(withComing.status, 409);
+  assert.match(withComing.data.message, /coming showings/);
+  assert.equal(movies.includes(booked) && movies.includes(upcoming), true);
+
+  assert.equal((await call('DELETE', `/api/movies/${past._id}`, { session: admin })).status, 200, 'old showings nobody booked go with it');
+  assert.equal(movies.includes(past), false);
+  assert.equal(showtimes.some((showing) => String(showing.movie) === String(past._id)), false);
+  assert.equal(showtimes.some((showing) => String(showing.movie) === String(booked._id)), true, 'other movies keep their showings');
   assert.equal((await call('DELETE', `/api/movies/${free._id}`, { session: admin })).status, 200);
-  assert.equal(movies.includes(free), false);
   assert.equal((await call('DELETE', `/api/movies/${free._id}`, { session: admin })).status, 404);
 });
 
