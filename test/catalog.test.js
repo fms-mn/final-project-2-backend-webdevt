@@ -181,6 +181,9 @@ test('admin movies: only admins, every status listed, writes validated', async (
   const bad = await call('POST', '/api/admin/movies', { body: { ...fresh, posterUrl: 'ftp://x', duration: 0 }, session: admin });
   assert.equal(bad.status, 400);
   assert.ok(bad.data.errors.posterUrl && bad.data.errors.duration);
+  const invalidDay = await call('POST', '/api/admin/movies', { body: { ...fresh, releaseDate: '2026-02-31' }, session: admin });
+  assert.equal(invalidDay.status, 400);
+  assert.ok(invalidDay.data.errors.releaseDate);
 });
 
 test('admin movies: updates re-validate; archive and duration are guarded by upcoming showtimes', async () => {
@@ -191,6 +194,9 @@ test('admin movies: updates re-validate; archive and duration are guarded by upc
 
   assert.equal((await patch(movie._id, { posterUrl: 'not a url' })).status, 400, 'updates are validated too');
   assert.equal((await patch(movie._id, { duration: 1.5 })).status, 400);
+  assert.equal((await patch(movie._id, { releaseDate: '2026-04-31' })).status, 400);
+  const historical = addMovie({ title: 'Historical release', status: 'draft' });
+  assert.equal((await patch(historical._id, { releaseDate: '1972-03-24' })).status, 200, 'legitimate historical movie edits remain allowed');
   assert.equal((await patch(movie._id, {})).status, 400);
   assert.equal((await patch(movie._id, { _id: 'x' })).status, 400, 'ignored fields do not count');
   assert.equal((await patch('nope', { title: 'x' })).status, 404);
