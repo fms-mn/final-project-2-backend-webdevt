@@ -395,6 +395,41 @@ test('blocked seats: an auditorium can block seats; they cannot be booked and do
   assert.equal((await book(ann, show, ['A1'])).status, 201, 'unblocked seats can be booked again');
 });
 
+test('room seat protection includes future claims and active holds and is checked again on save', async () => {
+  const movie = addMovie();
+  const hall = addHall({ blockedSeats: ['A1'] });
+  const other = addHall();
+  const admin = await signIn('boss', 'admin');
+  const customer = await signIn('ann');
+  const show = addShow(movie, hall, soon(DAY));
+  const past = addShow(movie, hall, soon(-HOUR));
+  const cancelled = addShow(movie, hall, soon(DAY), { status: 'cancelled' });
+  const elsewhere = addShow(movie, other, soon(DAY));
+  await book(customer, show, ['A2']);
+  add(Booking, bookings, { user: customer.user._id, showtime: show._id, seats: ['B1'], status: 'pending', holdExpiresAt: soon(HOUR), bookingCode: 'HOLD-1' });
+  add(Booking, bookings, { user: customer.user._id, showtime: show._id, seats: ['B2'], status: 'pending', holdExpiresAt: soon(-MIN), bookingCode: 'EXPIRED-1' });
+  for (const row of [past, cancelled, elsewhere]) add(SeatClaim, claims, { showtime: row._id, seatLabel: 'B3', booking: bookings[0]._id });
+  const path = `/api/auditoriums/${hall._id}/blocked-seats`;
+  assert.equal((await call('GET', path)).status, 401);
+  assert.equal((await call('GET', path, { session: customer })).status, 403);
+  const loaded = await call('GET', path, { session: admin });
+  assert.equal(loaded.status, 200);
+  assert.deepEqual(loaded.data.auditorium.blockedSeats, ['A1']);
+  assert.deepEqual(loaded.data.protectedSeats, ['A2', 'B1']);
+  const racingHold = add(Booking, bookings, { user: customer.user._id, showtime: show._id, seats: ['A3'], status: 'pending', holdExpiresAt: soon(HOUR), bookingCode: 'HOLD-RACE' });
+  assert.equal((await call('PUT', path, { session: admin, body: { seats: ['A1', 'A3'] } })).status, 409, 'a hold created after loading is revalidated');
+  racingHold.holdExpiresAt = soon(-MIN);
+  assert.equal((await call('PUT', path, { session: admin, body: { seats: ['A1', 'A3'] } })).status, 200, 'expired holds release their protection');
+  await call('PUT', path, { session: admin, body: { seats: ['A1'] } });
+  for (const seat of ['A2', 'B1']) {
+    const refused = await call('PUT', path, { session: admin, body: { seats: ['A1', seat] } });
+    assert.equal(refused.status, 409);
+    assert.deepEqual(auditoriums[0].blockedSeats, ['A1']);
+  }
+  assert.equal((await call('PUT', path, { session: admin, body: { seats: ['B2', 'B3'] } })).status, 200);
+  assert.deepEqual((await call('GET', path, { session: admin })).data.auditorium.blockedSeats, ['B2', 'B3']);
+});
+
 test('blocked seats: one showing can block seats without touching others in the room', async () => {
   const movie = addMovie();
   const hall = addHall();

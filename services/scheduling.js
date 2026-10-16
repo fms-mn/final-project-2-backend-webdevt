@@ -296,6 +296,20 @@ function readSeats(body, labels) {
 
 const sameSeats = (a, b) => a.length === b.length && a.every((seat, index) => seat === b[index]);
 
+async function protectedRoomSeats(coming, now, session) {
+  const showtime = { $in: coming.map(showing => showing._id) };
+  const claims = await SeatClaim.find({ showtime }).select('seatLabel').session(session);
+  const holds = await Booking.find({ showtime, status: 'pending', holdExpiresAt: { $gt: now } }).select('seats').session(session);
+  return [...new Set([...claims.map(claim => claim.seatLabel), ...holds.flatMap(hold => hold.seats)])].sort();
+}
+
+async function getRoomBlockedSeats(id, now = new Date()) {
+  const auditorium = await Auditorium.findById(id);
+  if (!auditorium) throw new HttpError(404, 'Auditorium not found');
+  const coming = await Showtime.find({ auditorium: id, status: 'scheduled', startTime: { $gt: now } });
+  return { auditorium, protectedSeats: await protectedRoomSeats(coming, now) };
+}
+
 // Replaces the auditorium's blocked seats. A seat cannot be newly blocked while a customer holds
 // it at a coming showing.
 async function setRoomBlockedSeats(id, body = {}, now = new Date()) {
@@ -306,9 +320,9 @@ async function setRoomBlockedSeats(id, body = {}, now = new Date()) {
     const newly = seats.filter((seat) => !(room.blockedSeats || []).includes(seat));
     const coming = await Showtime.find({ auditorium: room._id, status: 'scheduled', startTime: { $gt: now } }).session(session);
     if (newly.length) {
-      const held = await SeatClaim.find({ showtime: { $in: coming.map((s) => s._id) }, seatLabel: { $in: newly } }).session(session);
-      if (held.length) {
-        const labels = [...new Set(held.map((claim) => claim.seatLabel))].sort();
+      const protectedSeats = await protectedRoomSeats(coming, now, session);
+      const labels = newly.filter(seat => protectedSeats.includes(seat));
+      if (labels.length) {
         throw new HttpError(409, `Customers hold ${labels.join(', ')} at coming showings, so those seats cannot be blocked. Cancel or move those bookings first`);
       }
     }
@@ -347,5 +361,5 @@ async function setShowtimeBlockedSeats(id, body = {}, now = new Date()) {
 }
 
 module.exports = {
-  bulkSchedule, copyDay, rescheduleShowtime, setVisibility, setRoomBlockedSeats, setShowtimeBlockedSeats,
+  bulkSchedule, copyDay, rescheduleShowtime, setVisibility, getRoomBlockedSeats, setRoomBlockedSeats, setShowtimeBlockedSeats,
 };
