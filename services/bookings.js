@@ -13,6 +13,7 @@ const { getSettings } = require('./settings');
 const payments = require('./payments');
 const { cancellationInfo } = require('./cancellationInfo');
 const { admitBooking } = require('./bookingAdmission');
+const notifications = require('./mail/notifications');
 
 const MAX_SEATS_PER_BOOKING = 10;
 // Transient conflicts (another booking, cancellation or edit on the same showtime committed first)
@@ -73,7 +74,10 @@ const isDuplicateKey = (error) => Boolean(error) && error.code === 11000;
 // unpaid hold expires and the seats go back on sale. With PAYMENT_REQUIRED=false it confirms at once.
 async function createBooking(userId, body) {
   const input = readInput(body);
-  return admitBooking(input.showtime, () => reserveSeats(userId, input));
+  const booking = await admitBooking(input.showtime, () => reserveSeats(userId, input));
+  // With payments switched off the booking is confirmed at once, so the tickets go out now.
+  if (booking.status === 'confirmed') notifications.bookingConfirmed(booking._id);
+  return booking;
 }
 
 async function reserveSeats(userId, input) {
@@ -173,7 +177,9 @@ async function reserveSeats(userId, input) {
 // Cancels one booking and frees its seats in ONE transaction. Repeating it changes nothing.
 // Nothing can be cancelled once the showtime has started, for customers and admins alike.
 async function cancelBooking(bookingId, actor) {
-  return withTransaction(async (session) => {
+  let cancelledNow = false; // set only when this call is what cancelled a paid booking
+  const result = await withTransaction(async (session) => {
+    cancelledNow = false;
     const booking = await Booking.findById(bookingId).session(session);
     // Someone else's booking looks exactly like one that does not exist.
     if (!booking || !canAccess(actor, booking)) throw new HttpError(404, 'Booking not found');
@@ -195,8 +201,12 @@ async function cancelBooking(bookingId, actor) {
     await payments.refundBooking(booking, now, session); // a paid booking is refunded in full
     await booking.save({ session });
     await SeatClaim.deleteMany({ booking: booking._id }, { session });
+    cancelledNow = true;
     return booking;
   });
+  // An admin cancelling someone else's booking is "the cinema cancelled it"; the owner cancelling is not.
+  if (cancelledNow) notifications.bookingCancelled(result._id, { byCinema: String(actor._id) !== String(result.user) });
+  return result;
 }
 
 const canAccess = (actor, booking) => (
