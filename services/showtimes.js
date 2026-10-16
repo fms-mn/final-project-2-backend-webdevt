@@ -4,6 +4,7 @@ const Showtime = require('../models/Showtime');
 const Booking = require('../models/Booking');
 const SeatClaim = require('../models/SeatClaim');
 const payments = require('./payments');
+const notifications = require('./mail/notifications');
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, badRequest, collectErrors } = require('../utils/validate');
@@ -188,7 +189,9 @@ async function updateShowtime(id, body, now = new Date()) {
 // Cancels a future showtime together with every confirmed booking on it and frees their seats,
 // all in one transaction. Calling it again changes nothing.
 async function cancelShowtime(id, now = new Date()) {
-  return withTransaction(async (session) => {
+  let refundedBookings = []; // the paid bookings this call cancelled: their owners are emailed
+  const result = await withTransaction(async (session) => {
+    refundedBookings = [];
     const showtime = await Showtime.findById(id).session(session);
     if (!showtime) throw new HttpError(404, 'Showtime not found');
     if (showtime.status === 'cancelled') return { showtime, cancelledBookings: 0 };
@@ -208,11 +211,14 @@ async function cancelShowtime(id, now = new Date()) {
         await payments.refundBooking(booking, now, session);
         await booking.save({ session });
         cancelledBookings += 1;
+        refundedBookings.push(booking._id);
       }
     }
     await SeatClaim.deleteMany({ showtime: showtime._id }, { session });
     return { showtime, cancelledBookings };
   });
+  if (refundedBookings.length) notifications.showingCancelled(refundedBookings);
+  return result;
 }
 
 async function deleteShowtime(id) {

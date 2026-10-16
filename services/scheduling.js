@@ -11,6 +11,7 @@ const { isObjectId, dayRange, badRequest, collectErrors } = require('../utils/va
 const { atManila, daysBetween, manilaClock, manilaLabel, weekdayOf } = require('../utils/manila');
 const { getSettings } = require('./settings');
 const payments = require('./payments');
+const notifications = require('./mail/notifications');
 const {
   idOf, blockedSet, loadReferences, lockAuditorium, findClash, clashError, assertFuture, assertReleased, beforeRelease, releaseMessage,
 } = require('./showtimes');
@@ -218,7 +219,9 @@ async function rescheduleShowtime(id, body = {}, now = new Date()) {
   });
   if (isObjectId(id)) await payments.expireHolds({ showtimeId: id }); // timed-out holds hold no seats
 
-  return withTransaction(async (session) => {
+  let before = null; // where the showing was, for the email to customers who already booked it
+  const moved = await withTransaction(async (session) => {
+    before = null;
     const showtime = await Showtime.findById(id).session(session);
     if (!showtime) throw new HttpError(404, 'Showtime not found');
     if (showtime.status !== 'scheduled') throw new HttpError(409, 'A cancelled showtime cannot be moved');
@@ -252,6 +255,7 @@ async function rescheduleShowtime(id, body = {}, now = new Date()) {
     });
     if (clash) throw clashError(clash, nextStart, endTime, turnaroundMinutes);
 
+    before = { startTime: showtime.startTime, auditoriumId: idOf(showtime.auditorium) };
     showtime.originalStartTime = showtime.originalStartTime || showtime.startTime;
     showtime.rescheduledAt = now;
     // Seats blocked for this showing that the new room does not have are dropped with the move.
@@ -260,6 +264,11 @@ async function rescheduleShowtime(id, body = {}, now = new Date()) {
     await showtime.save({ session });
     return showtime;
   });
+  // Customers who already booked it hear about the change (only when the time or the room changed).
+  const changed = before && (new Date(before.startTime).getTime() !== new Date(moved.startTime).getTime()
+    || before.auditoriumId !== idOf(moved.auditorium));
+  if (changed) notifications.showingMoved(moved._id, before);
+  return moved;
 }
 
 // ---- hiding a showing from customers --------------------------------------------------------
