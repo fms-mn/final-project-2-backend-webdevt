@@ -126,6 +126,17 @@ test.after(() => new Promise((resolve) => server.close(resolve)));
 test.beforeEach(() => { clear(); transactionHook = null; });
 
 // ---- public movies -------------------------------------------------------------------------
+test('public genre filters match each saved genre without partial or regex matches', async () => {
+  addMovie({ title: 'Multiple genres', genre: 'Action, Drama, Sci-Fi' });
+  addMovie({ title: 'Legacy genres', genre: 'Adventure/Drama' });
+  addMovie({ title: 'Single genre', genre: 'Crime' });
+  for (const genre of ['Action', 'sci-fi']) {
+    assert.deepEqual((await call('GET', `/api/movies?genre=${encodeURIComponent(genre)}`)).data.map(movie => movie.title), ['Multiple genres']);
+  }
+  assert.deepEqual((await call('GET', '/api/movies?genre=Drama')).data.map(movie => movie.title).sort(), ['Legacy genres', 'Multiple genres']);
+  for (const genre of ['Act', '.*']) assert.deepEqual((await call('GET', `/api/movies?genre=${encodeURIComponent(genre)}`)).data, []);
+});
+
 test('public movies: published only, trimmed fields, filters, drafts are 404', async () => {
   const dune = addMovie();
   addMovie({ title: 'Secret Draft', status: 'draft' });
