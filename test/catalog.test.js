@@ -110,6 +110,7 @@ test.before(async () => {
     return { select: async () => find(), then: (res, rej) => Promise.resolve().then(find).then(res, rej) };
   });
   test.mock.method(User, 'findOne', async (filter) => users.find((u) => u.email === filter.email) || null);
+  test.mock.method(User.prototype, 'save', async function save() { return this; }); // signing in records its time
   fakeModel(Movie, movies);
   fakeModel(Auditorium, auditoriums, { uniqueOn: 'name' });
   fakeModel(Showtime, showtimes);

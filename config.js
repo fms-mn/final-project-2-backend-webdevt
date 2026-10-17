@@ -65,6 +65,17 @@ module.exports = {
   //   MAIL_FROM_NAME  the sender name customers see (default "filme").
   //   APP_URL         the public address of the website, for the buttons and the logo in emails.
   //   REMINDER_HOURS  how long before a showing the reminder email goes out (default 3).
+  // Account access (services/accountAccess.js). Read each time so a test can change them.
+  //   RESET_MINUTES        how long a password reset link works (default 60)
+  //   LOGIN_CODE_MINUTES   how long an emailed sign-in code works (default 10)
+  //   VERIFY_AFTER_DAYS    an account that has not signed in for this long must enter a code sent to its
+  //                        email at the next sign-in (default 30, 0 turns it off)
+  get resetMinutes() { return positiveNumber(process.env.RESET_MINUTES, 60); },
+  get loginCodeMinutes() { return positiveNumber(process.env.LOGIN_CODE_MINUTES, 10); },
+  get verifyAfterDays() {
+    const value = Number(process.env.VERIFY_AFTER_DAYS);
+    return process.env.VERIFY_AFTER_DAYS !== undefined && Number.isFinite(value) && value >= 0 ? value : 30;
+  },
   get mail() {
     const env = process.env;
     const detected = env.BREVO_API_KEY ? 'brevo' : env.RESEND_API_KEY ? 'resend' : (env.NODE_ENV === 'test' ? 'memory' : 'log');

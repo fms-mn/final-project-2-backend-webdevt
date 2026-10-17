@@ -172,4 +172,47 @@ function testEmail({ to, providerLabel, at }) {
   return { subject: 'filme test email', html, tags: ['test'], text: text(['Emails are working', '', `Sent to: ${to}`, `Sent through: ${providerLabel}`, `Sent at: ${at}`]) };
 }
 
-module.exports = { welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, reminder, testEmail };
+// ---- 8. forgot password: the reset link -------------------------------------------------------
+function passwordReset({ name, url, minutes }) {
+  const html = shell({
+    preheader: `Choose a new password. The link works for ${minutes} minutes.`,
+    rowsHtml: hero({ chip: 'Password reset', tone: 'info', title: `Reset your password, ${firstName(name)}`, lead: `We got a request to reset the password for your filme account. The button below works for ${minutes} minutes and only once.` })
+      + button(url, 'Choose a new password')
+      + notice({ tone: 'warn', title: 'Did not ask for this?', text: 'Ignore this email. Your password stays the same and nobody can use this link without your inbox.' })
+      + paragraph(`If the button does not work, copy this address into your browser:<br><span style="word-break:break-all;">${esc(url)}</span>`),
+  });
+  return {
+    subject: 'Reset your filme password', html, tags: ['password-reset'],
+    text: text([`Reset your password, ${firstName(name)}`, '', `We got a request to reset the password for your filme account. This link works for ${minutes} minutes and only once:`, url, '', 'Did not ask for this? Ignore this email. Your password stays the same.']),
+  };
+}
+
+// ---- 9. password changed: the security notice -------------------------------------------------
+function passwordChanged({ name }) {
+  const html = shell({
+    preheader: 'Your filme password was just changed.',
+    rowsHtml: hero({ chip: 'Password changed', tone: 'ok', title: 'Your password was changed', lead: `Hi ${firstName(name)}, the password for your filme account was just changed. You were signed out everywhere, so sign in again with the new one.` })
+      + notice({ tone: 'down', title: 'Was this not you?', text: 'Reset your password again right away from the sign-in page, because someone else may have access to your email.' })
+      + button(link('/login'), 'Sign in'),
+  });
+  return {
+    subject: 'Your filme password was changed', html, tags: ['password-changed'],
+    text: text([`Hi ${firstName(name)},`, '', 'The password for your filme account was just changed. You were signed out everywhere.', 'Was this not you? Reset your password again right away from the sign-in page.', link('/login') && `Sign in: ${link('/login')}`]),
+  };
+}
+
+// ---- 10. sign-in code after a long time away --------------------------------------------------
+function loginCode({ name, code, minutes }) {
+  const html = shell({
+    preheader: `Your filme sign-in code is ${code}.`,
+    rowsHtml: hero({ chip: 'Sign-in code', tone: 'info', title: `Your code, ${firstName(name)}`, lead: `It has been a while since you last signed in, so we need to check it is you. Enter this code on the sign-in page. It works for ${minutes} minutes.` })
+      + section(`<div style="margin:8px 0;padding:18px 12px;text-align:center;border:2px dashed ${C.line};border-radius:12px;background:${C.soft};"><span class="t-ink" style="font:800 34px/1 'SFMono-Regular',Menlo,Consolas,'Courier New',monospace;letter-spacing:10px;color:${C.ink};">${esc(code)}</span></div>`, { pad: '8px 32px 0' })
+      + notice({ tone: 'warn', title: 'Not you?', text: 'Do not share this code with anyone. If you did not try to sign in, change your password.' }),
+  });
+  return {
+    subject: `Your filme sign-in code: ${code}`, html, tags: ['login-code'],
+    text: text([`Your code, ${firstName(name)}`, '', `It has been a while since you last signed in. Enter this code on the sign-in page (valid for ${minutes} minutes):`, '', code, '', 'Do not share it. If you did not try to sign in, change your password.']),
+  };
+}
+
+module.exports = { welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, reminder, testEmail, passwordReset, passwordChanged, loginCode };

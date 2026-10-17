@@ -4,6 +4,7 @@ const Movie = require('../../models/Movie');
 const Auditorium = require('../../models/Auditorium');
 const Payment = require('../../models/Payment');
 const User = require('../../models/User');
+const config = require('../../config');
 const { manilaDay } = require('../../utils/manila');
 const { sendMail, notify, status } = require('./index');
 const templates = require('./templates');
@@ -86,6 +87,21 @@ const welcome = (userId) => notify(async () => {
   await sendMail({ to: user.email, toName: user.name, ...templates.welcome({ name: user.name }) });
 });
 
+// The forgot-password link. `secret` goes only into the email.
+const passwordReset = (userId, secret) => notify(async () => {
+  const user = await User.findById(userId);
+  if (!user || !user.isActive) return;
+  const url = `${config.mail.appUrl || ''}/reset-password?token=${encodeURIComponent(secret)}`;
+  await sendMail({ to: user.email, toName: user.name, ...templates.passwordReset({ name: user.name, url, minutes: config.resetMinutes }) });
+});
+
+// A password was changed (after a reset): a notice in case it was not the owner.
+const passwordChanged = (userId) => notify(async () => {
+  const user = await User.findById(userId);
+  if (!user) return;
+  await sendMail({ to: user.email, toName: user.name, ...templates.passwordChanged({ name: user.name }) });
+});
+
 // A booking was paid for (or booked with payments switched off). Sent once per booking.
 const bookingConfirmed = (bookingId) => notify(async () => {
   const data = await loadBooking(bookingId);
@@ -165,7 +181,7 @@ async function sendTest(to) {
 }
 
 module.exports = {
-  welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, sendReminder, sendTest,
+  welcome, passwordReset, passwordChanged, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, sendReminder, sendTest,
   // exposed for the preview script and tests
   ticketOf, money, whenPhrase,
 };
