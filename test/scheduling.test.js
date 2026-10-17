@@ -612,3 +612,85 @@ test('visibility: a booking racing with hiding is checked again', async () => {
   assert.equal(res.status, 409);
   assert.equal(showtimes[0].isPublished, true);
 });
+
+// ---- conflicts the planner can fix ----------------------------------------------------------
+test('bulk plan: a clash says what it hits and offers the next free time and another room', async () => {
+  const movie = addMovie({ title: 'Dune', duration: 120 });
+  const other = addMovie({ title: 'Quiet Film', duration: 100 });
+  const hallOne = addHall({ name: 'Auditorium 1' });
+  const hallTwo = addHall({ name: 'Auditorium 2' });
+  const admin = await signIn('boss', 'admin');
+  addShow(other, hallOne, atManila(day(3), '10:30')); // 10:30 to 12:10, in the way of the 10:00 slot
+
+  const plan = await call('POST', '/api/showtimes/bulk', {
+    body: bulkBody(movie, hallOne, { startDate: day(3), endDate: day(3), times: ['10:00', '17:00'], dryRun: true }), session: admin,
+  });
+  assert.equal(plan.status, 200);
+  assert.equal(plan.data.createdCount, 1);
+  const [clash] = plan.data.skipped;
+  assert.equal(clash.kind, 'clash');
+  assert.equal(clash.clash.title, 'Quiet Film');
+  assert.equal(manilaClock(clash.clash.startTime), '10:30');
+  assert.equal(manilaClock(clash.clash.endTime), '12:10');
+  assert.equal(clash.movie, String(movie._id));
+  assert.equal(clash.ticketPrice, 30000);
+  // 12:10 plus the 15 minute gap is 12:25, and the 17:00 slot of this plan is far enough away
+  assert.equal(manilaClock(clash.fixes.nextFree), '12:25');
+  assert.equal(manilaClock(clash.fixes.times[0]), '12:25');
+  assert.ok(clash.fixes.times.length >= 1 && clash.fixes.times.every((time, i) => i === 0 || new Date(time) - new Date(clash.fixes.times[i - 1]) >= (120 + 15) * MIN), 'later suggestions do not overlap the first');
+  assert.deepEqual(clash.fixes.rooms.map((room) => room.name), ['Auditorium 2']);
+  assert.equal(plan.data.created[0].ticketPrice, 30000, 'a ready showing carries its price so the plan can be saved as it is');
+});
+
+test('bulk plan: no fix is offered where there is none, and a past time is not a clash', async () => {
+  const movie = addMovie({ duration: 120 });
+  const hall = addHall();
+  const admin = await signIn('boss', 'admin');
+  addShow(movie, hall, atManila(day(3), '10:00'));
+  addShow(movie, hall, atManila(day(3), '12:30'));
+  addShow(movie, hall, atManila(day(3), '15:00'));
+  addShow(movie, hall, atManila(day(3), '17:30'));
+  addShow(movie, hall, atManila(day(3), '20:00'));
+  addShow(movie, hall, atManila(day(3), '22:30'));
+  const plan = await call('POST', '/api/showtimes/bulk', {
+    body: bulkBody(movie, hall, { startDate: day(3), endDate: day(3), times: ['11:00'], dryRun: true }), session: admin,
+  });
+  const [clash] = plan.data.skipped;
+  assert.equal(clash.kind, 'clash');
+  assert.equal(clash.fixes.nextFree, null, 'every gap that day is too short for a 2 hour movie');
+  assert.deepEqual(clash.fixes.times, []);
+  assert.deepEqual(clash.fixes.rooms, [], 'there is no other room');
+
+  const past = await call('POST', '/api/showtimes/bulk', {
+    body: bulkBody(movie, hall, { startDate: day(-2), endDate: day(-2), times: ['10:00'], dryRun: true }), session: admin,
+  });
+  assert.equal(past.data.skipped[0].kind, 'past');
+  assert.equal(past.data.skipped[0].fixes, undefined);
+});
+
+test('slots: saves exactly the showings listed, all or nothing, and checks them again', async () => {
+  const movie = addMovie({ duration: 120 });
+  const hall = addHall();
+  const admin = await signIn('boss', 'admin');
+  const slot = (clock, extra = {}) => ({ movie: String(movie._id), auditorium: String(hall._id), startTime: atManila(day(4), clock).toISOString(), ticketPrice: 35000, ...extra });
+
+  const plan = await call('POST', '/api/showtimes/slots', { body: { slots: [slot('10:00'), slot('14:00', { published: false })], dryRun: true }, session: admin });
+  assert.equal(plan.status, 200);
+  assert.equal(plan.data.createdCount, 2);
+  assert.equal(showtimes.length, 0, 'a dry run writes nothing');
+
+  const saved = await call('POST', '/api/showtimes/slots', { body: { slots: [slot('10:00'), slot('14:00', { published: false })] }, session: admin });
+  assert.equal(saved.status, 201);
+  assert.equal(showtimes.length, 2);
+  assert.deepEqual(showtimes.map((s) => [manilaClock(s.startTime), s.ticketPrice, s.isPublished]).sort(), [['10:00', 35000, true], ['14:00', 35000, false]]);
+
+  const again = await call('POST', '/api/showtimes/slots', { body: { slots: [slot('17:00'), slot('10:30')] }, session: admin });
+  assert.equal(again.status, 409, 'one slot that no longer fits fails the whole request');
+  assert.equal(showtimes.length, 2, 'so the 17:00 one was not saved either');
+
+  for (const bad of [{}, { slots: [] }, { slots: [{ movie: 'x' }] }, { slots: [slot('09:00', { ticketPrice: -1 })] }, { slots: [slot('09:00')], dryRun: 'yes' }]) {
+    assert.equal((await call('POST', '/api/showtimes/slots', { body: bad, session: admin })).status, 400);
+  }
+  const user = await signIn('ann');
+  assert.equal((await call('POST', '/api/showtimes/slots', { body: { slots: [slot('09:00')] }, session: user })).status, 403);
+});
