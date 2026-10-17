@@ -6,6 +6,7 @@ const { integer } = require('./validators');
 const settingSchema = new mongoose.Schema(
   {
     key: { type: String, required: true, unique: true, trim: true },
+    genres: { type: [String], default: undefined },
     // Minutes an auditorium needs between the end of one show and the start of the next
     // (cleaning, ads, getting people in and out). Checked whenever a showing is scheduled.
     turnaroundMinutes: {

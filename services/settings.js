@@ -1,8 +1,9 @@
 const Setting = require('../models/Setting');
 const { collectErrors } = require('../utils/validate');
+const { DEFAULT_GENRES, normalizeGenres } = require('../utils/genres');
 
 const KEY = 'cinema';
-const DEFAULTS = { turnaroundMinutes: 15, salesCutoffMinutes: 15, autoArchiveDays: 30 };
+const DEFAULTS = { turnaroundMinutes: 15, salesCutoffMinutes: 15, autoArchiveDays: 30, genres: DEFAULT_GENRES };
 const FIELDS = Object.keys(DEFAULTS);
 const LIMITS = { turnaroundMinutes: 240, salesCutoffMinutes: 1440, autoArchiveDays: 3650 };
 const UNITS = { turnaroundMinutes: 'minutes', salesCutoffMinutes: 'minutes', autoArchiveDays: 'days' };
@@ -23,6 +24,11 @@ async function updateSettings(body = {}) {
     for (const field of FIELDS) {
       if (body[field] === undefined) continue;
       const value = body[field];
+      if (field === 'genres') {
+        try { found.genres = normalizeGenres(value); }
+        catch (err) { fail('genres', err.message); }
+        continue;
+      }
       if (!Number.isInteger(value) || value < 0 || value > LIMITS[field]) {
         fail(field, `${field} must be a whole number of ${UNITS[field]} from 0 to ${LIMITS[field]}`);
       } else {
