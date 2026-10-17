@@ -4,7 +4,7 @@ const Showtime = require('../models/Showtime');
 const { adminAuth } = require('../middleware/auth');
 const { HttpError, wrap } = require('../utils/http');
 const Booking = require('../models/Booking');
-const { requireId, badRequest } = require('../utils/validate');
+const { requireId, badRequest, dayRange } = require('../utils/validate');
 const { cancelShowtime } = require('../services/showtimes');
 const { withShowingInfo } = require('../services/movieShowings');
 const { salesByMovie, movieSummary, emptySales } = require('../services/movieSales');
@@ -21,6 +21,12 @@ const EDITABLE_FIELDS = [
 const pickEditable = (body = {}) => Object.fromEntries(
   EDITABLE_FIELDS.filter((field) => body[field] !== undefined).map((field) => [field, body[field]]),
 );
+
+function validateReleaseDay(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value) && !dayRange(value.slice(0, 10))) {
+    throw badRequest({ releaseDate: 'Choose a valid release date.' });
+  }
+}
 
 const hasFutureShowtime = (movieId) => Showtime.exists({
   movie: movieId, status: 'scheduled', startTime: { $gt: new Date() },
@@ -53,6 +59,7 @@ router.get('/:id/summary', adminAuth, wrap(async (req, res) => {
 }));
 
 router.post('/', adminAuth, wrap(async (req, res) => {
+  validateReleaseDay(req.body?.releaseDate);
   const movie = new Movie(pickEditable(req.body));
   await movie.validate(); // a bad request is a 400 before the publish rule is looked at
   if (movie.status === 'published') await assertCanPublish(movie);
@@ -73,6 +80,7 @@ router.post('/auto-archive', adminAuth, wrap(async (req, res) => {
 router.patch('/:id', adminAuth, wrap(async (req, res) => {
   requireId(req.params.id, 'Movie');
   const changes = pickEditable(req.body);
+  validateReleaseDay(changes.releaseDate);
   if (Object.keys(changes).length === 0) {
     throw badRequest({ body: `Send at least one of: ${EDITABLE_FIELDS.join(', ')}` });
   }

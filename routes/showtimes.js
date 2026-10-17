@@ -96,6 +96,12 @@ router.post('/', adminAuth, wrap(async (req, res) => {
   res.status(201).json(await service.createShowtime(req.body));
 }));
 
+// Exactly these showings (each with its own movie, room, start and price), all or nothing.
+router.post('/slots', adminAuth, wrap(async (req, res) => {
+  const result = await scheduling.scheduleExact(req.body);
+  res.status(result.dryRun ? 200 : 201).json(result);
+}));
+
 // Many showings at once: one movie in one room, on a range of days, at several start times.
 router.post('/bulk', adminAuth, wrap(async (req, res) => {
   const result = await scheduling.bulkSchedule(req.body);

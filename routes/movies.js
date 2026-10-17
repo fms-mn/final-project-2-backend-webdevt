@@ -33,7 +33,7 @@ router.get('/', wrap(async (req, res) => {
   const filter = { status: 'published' };
 
   if (typeof genre === 'string' && genre) {
-    filter.genre = { $regex: `^${escapeRegex(genre)}$`, $options: 'i' };
+    filter.genre = { $regex: `(?:^|[,/;|])\\s*${escapeRegex(genre.trim())}\\s*(?:[,/;|]|$)`, $options: 'i' };
   }
   if (typeof search === 'string' && search) {
     filter.title = { $regex: escapeRegex(search), $options: 'i' };

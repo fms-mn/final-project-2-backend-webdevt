@@ -115,6 +115,19 @@ test.beforeEach(() => { clear(); transactionHook = null; });
 
 const iso = (n, clock = '18:00') => atManila(day(n), clock);
 
+test('genre settings are admin-only and deleting a genre preserves existing movies', async () => {
+  const movie = addMovie({ genre: 'Drama, Local Cinema' });
+  assert.equal((await call('PATCH', '/api/admin/settings', { body: { genres: ['Drama'] } })).status, 401);
+  const customer = await signIn('genre-customer');
+  assert.equal((await setRules(customer, { genres: ['Drama'] })).status, 403);
+  const admin = await signIn('genre-admin', 'admin');
+  assert.equal((await setRules(admin, { genres: ['Drama', 'Local Cinema'] })).status, 200);
+  assert.equal((await setRules(admin, { genres: ['Drama'] })).status, 200);
+  const loaded = await call('GET', '/api/admin/settings', { session: admin });
+  assert.deepEqual(loaded.data.genres, ['Drama']);
+  assert.equal(movie.genre, 'Drama, Local Cinema');
+});
+
 // ---- 1. no showing before the release day --------------------------------------------------
 test('release day: a showing cannot start before the movie is released', async () => {
   const movie = addMovie({ title: 'Big Premiere', releaseDate: new Date(`${day(5)}T00:00:00Z`) });
