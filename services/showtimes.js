@@ -273,7 +273,7 @@ async function describeShowtimes(showtimes, { publicOnly }) {
     rows.push({
       _id: showtime._id,
       movie: movie
-        ? { _id: movie._id, title: movie.title, posterUrl: movie.posterUrl, duration: movie.duration, rating: movie.rating }
+        ? { _id: movie._id, title: movie.title, posterUrl: movie.posterUrl, duration: movie.duration, rating: movie.rating, ...(publicOnly ? {} : { status: movie.status }) }
         : { _id: showtime.movie },
       auditorium: auditorium ? { _id: auditorium._id, name: auditorium.name } : { _id: showtime.auditorium },
       startTime: showtime.startTime,

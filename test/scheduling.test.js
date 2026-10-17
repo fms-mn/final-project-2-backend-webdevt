@@ -102,7 +102,7 @@ test.before(async () => {
   fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
   fakeTransactions({
-    stores: [bookings, claims, showtimes, auditoriums, settings],
+    stores: [movies, bookings, claims, showtimes, auditoriums, settings],
     beforeAttempt: (attempt) => (transactionHook ? transactionHook(attempt) : false),
   });
   server = await new Promise((resolve) => { const s = createApp().listen(0, () => resolve(s)); });
@@ -575,4 +575,87 @@ test('visibility: a booking racing with hiding is checked again', async () => {
   const res = await call('PATCH', `/api/showtimes/${show._id}/visibility`, { body: { published: false }, session: admin });
   assert.equal(res.status, 409);
   assert.equal(showtimes[0].isPublished, true);
+});
+
+
+test('schedule and publish: preview is read-only, commit makes the movie and tickets visible together', async () => {
+  const movie = addMovie({ status: 'draft' });
+  const hall = addHall();
+  const admin = await signIn('boss', 'admin');
+  const body = bulkBody(movie, hall, { publishMovie: true });
+  const check = await call('POST', '/api/showtimes/bulk', { session: admin, body: { ...body, dryRun: true } });
+  assert.equal(check.status, 200);
+  assert.equal(check.data.createdCount, 6);
+  assert.equal(movie.status, 'draft');
+  assert.equal(showtimes.length, 0);
+  assert.equal((await call('GET', '/api/movies')).data.length, 0);
+  const saved = await call('POST', '/api/showtimes/bulk', { session: admin, body });
+  assert.equal(saved.status, 201);
+  assert.equal(saved.data.moviePublished, true);
+  assert.equal(movie.status, 'published');
+  assert.equal((await call('GET', '/api/showtimes')).data.length, 6);
+  const publicMovie = (await call('GET', `/api/movies/${movie._id}`)).data;
+  assert.equal(publicMovie.upcomingShowings, 6);
+  assert.equal(publicMovie.showStatus, 'now_showing');
+});
+
+test('schedule and publish: conflicts roll back everything unless skipping was explicitly chosen', async () => {
+  const movie = addMovie({ status: 'draft' });
+  const hall = addHall();
+  addShow(addMovie({ title: 'Other movie' }), hall, atManila(day(2), '10:00'));
+  const admin = await signIn('boss', 'admin');
+  const body = bulkBody(movie, hall, { publishMovie: true, endDate: day(2) });
+  const refused = await call('POST', '/api/showtimes/bulk', { session: admin, body });
+  assert.equal(refused.status, 409);
+  assert.equal(showtimes.length, 1);
+  assert.equal(movie.status, 'draft');
+  const partial = await call('POST', '/api/showtimes/bulk', { session: admin, body: { ...body, skipConflicts: true } });
+  assert.equal(partial.status, 201);
+  assert.equal(partial.data.createdCount, 1);
+  assert.equal(partial.data.skippedCount, 1);
+  assert.equal(movie.status, 'published');
+});
+
+test('schedule and publish: an empty schedule, hidden schedule or invalid flag cannot publish a draft', async () => {
+  const movie = addMovie({ status: 'draft' });
+  const hall = addHall();
+  const admin = await signIn('boss', 'admin');
+  const body = bulkBody(movie, hall, { publishMovie: true, startDate: day(-2), endDate: day(-2), skipConflicts: true });
+  assert.equal((await call('POST', '/api/showtimes/bulk', { session: admin, body })).status, 409);
+  assert.equal(movie.status, 'draft');
+  assert.equal(showtimes.length, 0);
+  for (const changes of [{ published: false }, { publishMovie: 'yes' }]) {
+    assert.equal((await call('POST', '/api/showtimes/bulk', { session: admin, body: { ...bulkBody(movie, hall), publishMovie: true, ...changes } })).status, 400);
+  }
+});
+
+test('schedule and publish: release date and sales cutoff produce actionable preview reasons', async () => {
+  const movie = addMovie({ status: 'draft', releaseDate: atManila(day(5), '00:00') });
+  const hall = addHall();
+  const admin = await signIn('boss', 'admin');
+  const preview = await call('POST', '/api/showtimes/bulk', { session: admin, body: bulkBody(movie, hall, { publishMovie: true, dryRun: true }) });
+  assert.equal(preview.data.createdCount, 0);
+  assert.match(preview.data.skipped[0].reason, /release/);
+  movie.releaseDate = atManila(day(-1), '00:00');
+  const { bulkSchedule } = require('../services/scheduling');
+  const now = atManila(day(1), '10:00');
+  const cutoff = await bulkSchedule(bulkBody(movie, hall, { startDate: day(1), endDate: day(1), times: ['10:15', '11:00'], publishMovie: true, dryRun: true }), now);
+  assert.equal(cutoff.createdCount, 1);
+  assert.match(cutoff.skipped[0].reason, /Online sales close 15 minutes/);
+});
+
+test('admin movie counts distinguish hidden and sales-closed showings from tickets on sale', async () => {
+  const movie = addMovie();
+  const hall = addHall();
+  addShow(movie, hall, soon(5 * MIN));
+  addShow(movie, hall, soon(DAY), { isPublished: false });
+  addShow(movie, hall, soon(2 * DAY));
+  const admin = await signIn('boss', 'admin');
+  const row = (await call('GET', '/api/admin/movies', { session: admin })).data[0];
+  assert.equal(row.upcomingShowings, 1);
+  assert.equal(row.scheduledShowings, 3);
+  assert.equal(row.hiddenShowings, 1);
+  const publicRow = (await call('GET', '/api/movies')).data[0];
+  assert.equal(publicRow.upcomingShowings, 1);
+  assert.equal('hiddenShowings' in publicRow, false);
 });

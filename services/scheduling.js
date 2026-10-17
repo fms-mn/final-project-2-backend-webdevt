@@ -56,12 +56,14 @@ function readBulk(body = {}) {
     } else {
       input.ticketPrice = body.ticketPrice;
     }
-    for (const flag of ['published', 'skipConflicts', 'dryRun']) {
+    for (const flag of ['published', 'publishMovie', 'skipConflicts', 'dryRun']) {
       if (body[flag] !== undefined && typeof body[flag] !== 'boolean') fail(flag, `${flag} must be true or false`);
     }
     Object.assign(input, {
-      published: body.published ?? true, skipConflicts: body.skipConflicts ?? false, dryRun: body.dryRun ?? false,
+      published: body.published ?? true, publishMovie: body.publishMovie ?? false,
+      skipConflicts: body.skipConflicts ?? false, dryRun: body.dryRun ?? false,
     });
+    if (input.publishMovie && !input.published) fail('published', 'Showings must be visible when publishing the movie. Choose Save schedule only to keep them hidden.');
     if (input.startDate && input.endDate && input.times) {
       const days = daysBetween(input.startDate, input.endDate)
         .filter((day) => !input.weekdays || input.weekdays.includes(weekdayOf(day)));
@@ -76,9 +78,9 @@ function readBulk(body = {}) {
 // Tries every slot inside ONE transaction. A slot that cannot be scheduled (past, clashing with
 // another showing or with the turnaround gap, movie unpublished, room inactive) is either listed
 // as skipped (skipConflicts / dryRun) or makes the whole request fail with nothing saved.
-async function scheduleSlots(slots, { skipConflicts, dryRun, now = new Date() }) {
+async function scheduleSlots(slots, { skipConflicts, dryRun, publishMovie = false, now = new Date() }) {
   return withTransaction(async (session) => {
-    const { turnaroundMinutes } = await getSettings(session);
+    const { turnaroundMinutes, salesCutoffMinutes } = await getSettings(session);
     const movies = new Map();
     const rooms = new Map();
     const locked = new Set();
@@ -94,6 +96,9 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, now = new Date() })
     for (const slot of [...slots].sort((a, b) => a.startTime - b.startTime)) {
       try {
         if (slot.startTime <= now) throw new SlotProblem('That time has already passed');
+        if (publishMovie && slot.startTime.getTime() <= now.getTime() + salesCutoffMinutes * 60000) {
+          throw new SlotProblem(`Online sales close ${salesCutoffMinutes} minutes before the start. Choose a later time to put this showing on sale.`);
+        }
         const movie = await cached(movies, Movie, slot.movie);
         if (!movie) throw new SlotProblem('The movie no longer exists');
         if (movie.status === 'archived') throw new SlotProblem(`"${movie.title}" is archived`);
@@ -106,11 +111,14 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, now = new Date() })
         const gap = turnaroundMinutes * 60 * 1000;
         const near = planned.find((other) => other.auditorium === slot.auditorium
           && other.start < endTime.getTime() + gap && other.end > slot.startTime.getTime() - gap);
-        if (near) throw new SlotProblem(`Clashes with another showing in this same request (${manilaLabel(near.start)})`);
+        if (near) throw new SlotProblem(`Clashes with another showing in this same request (${manilaLabel(near.start)}). Allow ${movie.duration} minutes for the movie and ${turnaroundMinutes} minutes between shows; try ${manilaLabel(near.end + gap)} or another room.`);
         const clash = await findClash({
           auditoriumId: slot.auditorium, startTime: slot.startTime, endTime, turnaroundMinutes, session,
         });
-        if (clash) throw new SlotProblem(clashError(clash, slot.startTime, endTime, turnaroundMinutes).message);
+        if (clash) {
+          const otherMovie = await Movie.findById(clash.movie).session(session);
+          throw new SlotProblem(`${room.name}${otherMovie ? `: "${otherMovie.title}"` : ''}. ${clashError(clash, slot.startTime, endTime, turnaroundMinutes).message}. Try ${manilaLabel(clash.endTime.getTime() + gap)} or choose another room.`);
+        }
 
         planned.push({ auditorium: slot.auditorium, start: slot.startTime.getTime(), end: endTime.getTime() });
         if (dryRun) {
@@ -142,8 +150,20 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, now = new Date() })
         errors: Object.fromEntries(skipped.map((item) => [item.label, item.reason])),
       });
     }
+    // Publishing and the showings commit together. A failed schedule never leaves a movie live.
+    if (publishMovie && created.length === 0 && !dryRun) {
+      throw new HttpError(409, 'No showings could be scheduled. Choose another time or room before publishing.');
+    }
+    if (publishMovie && !dryRun) {
+      for (const movie of movies.values()) {
+        movie.status = 'published';
+        movie.autoArchivedAt = undefined;
+        await movie.save({ session });
+      }
+    }
     return {
       dryRun, requested: slots.length, createdCount: created.length, skippedCount: skipped.length, created, skipped,
+      ...(publishMovie ? { moviePublished: !dryRun } : {}),
     };
   });
 }
@@ -156,7 +176,7 @@ async function bulkSchedule(body, now = new Date()) {
     input.slots.map((startTime) => ({
       movie: input.movie, auditorium: input.auditorium, startTime, ticketPrice: input.ticketPrice, published: input.published,
     })),
-    { skipConflicts: input.skipConflicts, dryRun: input.dryRun, now },
+    { skipConflicts: input.skipConflicts, dryRun: input.dryRun, publishMovie: input.publishMovie, now },
   );
 }
 

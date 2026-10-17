@@ -37,7 +37,7 @@ router.get('/', adminAuth, wrap(async (req, res) => {
   }
   const movies = await Movie.find(filter).sort({ createdAt: -1 });
   const [withShowings, sales] = await Promise.all([
-    withShowingInfo(movies.map((movie) => movie.toJSON())),
+    withShowingInfo(movies.map((movie) => movie.toJSON()), new Date(), { admin: true }),
     salesByMovie(movies.map((movie) => movie._id)),
   ]);
   // Each movie also carries what it has earned, so the list can show revenue without more requests.
