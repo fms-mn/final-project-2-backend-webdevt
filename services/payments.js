@@ -7,6 +7,7 @@ const PAYMENT_MODE = 'simulated';
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { badRequest, collectErrors } = require('../utils/validate');
+const notifications = require('./mail/notifications');
 
 // A SIMULATED payment gateway. No real money moves and no card is ever contacted, but the flow is
 // the one a real gateway has:
@@ -252,6 +253,7 @@ async function startPayment(userId, bookingId, body, now = new Date()) {
   if (failure) throw await recordFailure(payment, failure[0], failure[1]);
   try {
     const settled = await settlePaid(payment._id, new Date());
+    notifications.bookingConfirmed(settled.booking._id); // the receipt, sent in the background
     return { ...settled, awaitingApproval: false };
   } catch (err) {
     // Refused (showing cancelled or hidden, hold gone): close the attempt instead of leaving it open.
@@ -278,7 +280,9 @@ async function authorizeWallet(userId, paymentId, approve, now = new Date()) {
   if (!approve) {
     throw await recordFailure(payment, 'declined_by_customer', `The payment was declined in ${WALLET_NAMES[payment.method]}.`);
   }
-  return settlePaid(payment._id, new Date());
+  const settled = await settlePaid(payment._id, new Date());
+  notifications.bookingConfirmed(settled.booking._id);
+  return settled;
 }
 
 // ---- refunds -------------------------------------------------------------------------------

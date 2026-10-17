@@ -65,6 +65,12 @@ mongoose
       .then(({ archived }) => { if (archived.length) console.log(`Archived ${archived.length} quiet movie(s): ${archived.map((movie) => movie.title).join(', ')}`); })
       .catch((error) => console.error('Archiving quiet movies failed:', error.message));
     setTimeout(() => { sweepMovies(); setInterval(sweepMovies, 60 * 60 * 1000).unref(); }, 60 * 60 * 1000).unref();
+    // Customers get one reminder email a few hours before their showing (see services/mail/reminders.js).
+    const { sendDueReminders } = require('./services/mail/reminders');
+    const sweepReminders = () => sendDueReminders()
+      .then(({ sent }) => { if (sent) console.log(`Sent ${sent} showing reminder email(s)`); })
+      .catch((error) => console.error('Sending reminders failed:', error.message));
+    setTimeout(() => { sweepReminders(); setInterval(sweepReminders, 10 * 60 * 1000).unref(); }, 60 * 1000).unref();
     setInterval(() => { expireHolds().catch((error) => console.error('Releasing holds failed:', error.message)); }, 30 * 1000).unref();
   })
   .catch((err) => {
