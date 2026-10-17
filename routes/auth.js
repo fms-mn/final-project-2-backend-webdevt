@@ -1,5 +1,6 @@
 const express = require('express');
 const passwords = require('../services/passwords');
+const access = require('../services/accountAccess');
 const config = require('../config');
 const notifications = require('../services/mail/notifications');
 const User = require('../models/User');
@@ -13,6 +14,9 @@ const router = express.Router();
 const limits = { windowMs: config.loginRateWindowMs };
 const failuresByEmail = createRateLimiter({ ...limits, name: 'email', max: config.loginRateMax });
 const failuresByIp = createRateLimiter({ ...limits, name: 'ip', max: config.loginRateMax * 5 });
+
+// Asking for reset emails is limited per IP (every request counts, found account or not).
+const resetByIp = createRateLimiter({ name: 'forgot', windowMs: 60 * 60 * 1000, max: 10, message: (minutes) => `Too many requests. Please wait ${minutes} minute${minutes === 1 ? '' : 's'} and try again.` });
 
 // Compared against when the email is unknown, so a wrong email and a wrong password take
 // about as long and cannot be told apart by timing.
@@ -47,6 +51,7 @@ router.post('/register', wrap(async (req, res) => {
     phone: phone || undefined,
     passwordHash: await User.hashPassword(password),
     role: 'user',
+    lastLoginAt: new Date(), // registering is a sign-in
   });
   try {
     await user.save();
@@ -81,8 +86,56 @@ router.post('/login', wrap(async (req, res) => {
   if (!user.isActive) throw new HttpError(403, 'Account is deactivated');
 
   await failuresByEmail.clear(emailKey);
+
+  // An account that stayed away for a long time proves it is the owner with a code sent by email.
+  if (access.needsLoginCode(user)) {
+    const challenge = await access.startLoginChallenge(user);
+    if (challenge) return res.status(202).json({ verificationRequired: true, ...challenge });
+  }
+  await access.markSignedIn(user);
   const csrfToken = startSession(res, user);
   res.json({ user, csrfToken });
+}));
+
+// Second step of a sign-in that asked for a code.
+router.post('/login/verify', wrap(async (req, res) => {
+  const { challenge, code } = req.body || {};
+  await failuresByIp.check(req.ip);
+  let user;
+  try {
+    user = await access.verifyLoginCode(challenge, code);
+  } catch (error) {
+    if (error.status === 400) await failuresByIp.fail(req.ip);
+    throw error;
+  }
+  await access.markSignedIn(user);
+  const csrfToken = startSession(res, user);
+  res.json({ user, csrfToken });
+}));
+
+router.post('/login/resend', wrap(async (req, res) => {
+  res.json(await access.resendLoginCode((req.body || {}).challenge));
+}));
+
+// Forgot password: always the same answer, so it cannot be used to find out who has an account.
+router.post('/forgot-password', wrap(async (req, res) => {
+  const { email } = req.body || {};
+  if (typeof email !== 'string' || !email.trim()) throw new HttpError(400, 'Enter your email address');
+  await resetByIp.check(req.ip);
+  await resetByIp.fail(req.ip);
+  await access.requestPasswordReset(email);
+  res.json({ message: 'If that email belongs to an account, a reset link is on its way. It works for a limited time.' });
+}));
+
+// Lets the reset page say a link is dead before asking for a new password.
+router.post('/reset-password/check', wrap(async (req, res) => {
+  res.json({ valid: await access.checkResetToken((req.body || {}).token) });
+}));
+
+router.post('/reset-password', wrap(async (req, res) => {
+  const { token, password } = req.body || {};
+  await access.resetPassword(token, password);
+  res.json({ message: 'Your password was changed. Sign in with the new one.' });
 }));
 
 // Logout: always clears the cookie, even when the session has already expired.

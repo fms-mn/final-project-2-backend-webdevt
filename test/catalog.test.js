@@ -110,6 +110,7 @@ test.before(async () => {
     return { select: async () => find(), then: (res, rej) => Promise.resolve().then(find).then(res, rej) };
   });
   test.mock.method(User, 'findOne', async (filter) => users.find((u) => u.email === filter.email) || null);
+  test.mock.method(User.prototype, 'save', async function save() { return this; }); // signing in records its time
   fakeModel(Movie, movies);
   fakeModel(Auditorium, auditoriums, { uniqueOn: 'name' });
   fakeModel(Showtime, showtimes);
@@ -126,6 +127,17 @@ test.after(() => new Promise((resolve) => server.close(resolve)));
 test.beforeEach(() => { clear(); transactionHook = null; });
 
 // ---- public movies -------------------------------------------------------------------------
+test('public genre filters match each saved genre without partial or regex matches', async () => {
+  addMovie({ title: 'Multiple genres', genre: 'Action, Drama, Sci-Fi' });
+  addMovie({ title: 'Legacy genres', genre: 'Adventure/Drama' });
+  addMovie({ title: 'Single genre', genre: 'Crime' });
+  for (const genre of ['Action', 'sci-fi']) {
+    assert.deepEqual((await call('GET', `/api/movies?genre=${encodeURIComponent(genre)}`)).data.map(movie => movie.title), ['Multiple genres']);
+  }
+  assert.deepEqual((await call('GET', '/api/movies?genre=Drama')).data.map(movie => movie.title).sort(), ['Legacy genres', 'Multiple genres']);
+  for (const genre of ['Act', '.*']) assert.deepEqual((await call('GET', `/api/movies?genre=${encodeURIComponent(genre)}`)).data, []);
+});
+
 test('public movies: published only, trimmed fields, filters, drafts are 404', async () => {
   const dune = addMovie();
   addMovie({ title: 'Secret Draft', status: 'draft' });
@@ -181,6 +193,9 @@ test('admin movies: only admins, every status listed, writes validated', async (
   const bad = await call('POST', '/api/admin/movies', { body: { ...fresh, posterUrl: 'ftp://x', duration: 0 }, session: admin });
   assert.equal(bad.status, 400);
   assert.ok(bad.data.errors.posterUrl && bad.data.errors.duration);
+  const invalidDay = await call('POST', '/api/admin/movies', { body: { ...fresh, releaseDate: '2026-02-31' }, session: admin });
+  assert.equal(invalidDay.status, 400);
+  assert.ok(invalidDay.data.errors.releaseDate);
 });
 
 test('admin movies: updates re-validate; archive and duration are guarded by upcoming showtimes', async () => {
@@ -191,6 +206,9 @@ test('admin movies: updates re-validate; archive and duration are guarded by upc
 
   assert.equal((await patch(movie._id, { posterUrl: 'not a url' })).status, 400, 'updates are validated too');
   assert.equal((await patch(movie._id, { duration: 1.5 })).status, 400);
+  assert.equal((await patch(movie._id, { releaseDate: '2026-04-31' })).status, 400);
+  const historical = addMovie({ title: 'Historical release', status: 'draft' });
+  assert.equal((await patch(historical._id, { releaseDate: '1972-03-24' })).status, 200, 'legitimate historical movie edits remain allowed');
   assert.equal((await patch(movie._id, {})).status, 400);
   assert.equal((await patch(movie._id, { _id: 'x' })).status, 400, 'ignored fields do not count');
   assert.equal((await patch('nope', { title: 'x' })).status, 404);

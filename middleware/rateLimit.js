@@ -9,7 +9,7 @@ const LoginAttempt = require('../models/LoginAttempt');
 //   await limiter.clear(key)  forgets the key (call after a success)
 //
 // `name` keeps different limiters apart inside the one collection.
-function createRateLimiter({ name, windowMs, max }) {
+function createRateLimiter({ name, windowMs, max, message }) {
   const rowKey = (key) => `${name}|${key}`;
 
   return {
@@ -21,7 +21,7 @@ function createRateLimiter({ name, windowMs, max }) {
         const minutes = Math.ceil(retryAfter / 60);
         throw new HttpError(
           429,
-          `Too many failed sign-in attempts. Please wait ${minutes} minute${minutes === 1 ? '' : 's'} before trying again. Even the right password is refused until then.`,
+          message ? message(minutes) : `Too many failed sign-in attempts. Please wait ${minutes} minute${minutes === 1 ? '' : 's'} before trying again. Even the right password is refused until then.`,
           { retryAfter },
         );
       }

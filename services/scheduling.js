@@ -8,7 +8,7 @@ const SeatClaim = require('../models/SeatClaim');
 const { HttpError } = require('../utils/http');
 const { withTransaction } = require('../utils/transaction');
 const { isObjectId, dayRange, badRequest, collectErrors } = require('../utils/validate');
-const { atManila, daysBetween, manilaClock, manilaLabel, weekdayOf } = require('../utils/manila');
+const { atManila, daysBetween, manilaClock, manilaDay, manilaLabel, weekdayOf } = require('../utils/manila');
 const { getSettings } = require('./settings');
 const payments = require('./payments');
 const notifications = require('./mail/notifications');
@@ -21,7 +21,13 @@ const MAX_SLOTS = 200;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // A slot that cannot be scheduled. Carries the reason an admin reads, never reaches the client as 500.
-class SlotProblem extends Error {}
+// `kind` says what to do about it: 'past' and 'unavailable' have no fix, 'clash' comes with fixes.
+class SlotProblem extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    Object.assign(this, { kind: 'unavailable' }, details);
+  }
+}
 
 // ---- scheduling many showings -------------------------------------------------------------
 function readBulk(body = {}) {
@@ -92,10 +98,77 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, publishMovie = fals
       if (!cache.has(id)) cache.set(id, await model.findById(id).session(session));
       return cache.get(id);
     };
+    const gap = turnaroundMinutes * 60 * 1000;
+    let activeRooms = null;
+
+    // Every showing this request asks for, with the time it would end. A suggested fix keeps clear of
+    // all of them, so fixes for neighbouring clashes do not land on each other.
+    const intended = [];
+    for (const slot of slots) {
+      const movie = await cached(movies, Movie, slot.movie);
+      if (movie) intended.push({ slot, auditorium: slot.auditorium, start: slot.startTime.getTime(), end: Showtime.computeEndTime(slot.startTime, movie.duration).getTime() });
+    }
+
+    // When does whatever is in the way of this room and time end (ms), or null when it is free?
+    // Looks at showings decided earlier in this request and at the saved schedule.
+    const blockerEnd = async (auditorium, start, end, self = null) => {
+      const near = [...planned, ...intended.filter((other) => other.slot !== self)].find((other) => other.auditorium === auditorium
+        && other.start < end.getTime() + gap && other.end > start.getTime() - gap);
+      if (near) return near.end;
+      const clash = await findClash({ auditoriumId: auditorium, startTime: start, endTime: end, turnaroundMinutes, session });
+      return clash ? clash.endTime.getTime() : null;
+    };
+
+    // The first free start in the same room that day, after `from`, to the next 5 minutes.
+    const nextFreeStart = async (slot, movie, from) => {
+      const day = manilaDay(slot.startTime);
+      let start = new Date(Math.ceil(from / 300000) * 300000);
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (manilaDay(start) !== day) return null;
+        const end = Showtime.computeEndTime(start, movie.duration);
+        const blocked = await blockerEnd(slot.auditorium, start, end, slot);
+        if (blocked === null) return start;
+        start = new Date(Math.ceil((blocked + gap) / 300000) * 300000);
+      }
+      return null;
+    };
+
+    // Several free starts that do not overlap each other, so neighbouring clashes can each take one.
+    const freeStarts = async (slot, movie, from) => {
+      const found = [];
+      let cursor = from;
+      while (found.length < 6) {
+        const start = await nextFreeStart(slot, movie, cursor);
+        if (!start) break;
+        found.push(start);
+        cursor = start.getTime() + (movie.duration * 60 + turnaroundMinutes * 60) * 1000;
+      }
+      return found;
+    };
+
+    // Other active rooms where the same time is free.
+    const freeRooms = async (slot, movie, endTime) => {
+      if (!activeRooms) activeRooms = await Auditorium.find({ isActive: true }).session(session);
+      const found = [];
+      for (const room of activeRooms) {
+        const id = String(room._id);
+        if (id === String(slot.auditorium)) continue;
+        if (await blockerEnd(id, slot.startTime, endTime, slot) === null) found.push({ _id: room._id, name: room.name });
+        if (found.length === 3) break;
+      }
+      return found;
+    };
+
+    // A clash, described for the admin: what it hits and where else the showing could go.
+    const clashProblem = async (message, blocker, slot, movie, endTime) => {
+      const times = await freeStarts(slot, movie, blocker.end + gap);
+      const fixes = { nextFree: times[0] || null, times, rooms: await freeRooms(slot, movie, endTime) };
+      return new SlotProblem(message, { kind: 'clash', clash: blocker, fixes });
+    };
 
     for (const slot of [...slots].sort((a, b) => a.startTime - b.startTime)) {
       try {
-        if (slot.startTime <= now) throw new SlotProblem('That time has already passed');
+        if (slot.startTime <= now) throw new SlotProblem('That time has already passed', { kind: 'past' });
         if (publishMovie && slot.startTime.getTime() <= now.getTime() + salesCutoffMinutes * 60000) {
           throw new SlotProblem(`Online sales close ${salesCutoffMinutes} minutes before the start. Choose a later time to put this showing on sale.`);
         }
@@ -108,21 +181,31 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, publishMovie = fals
         if (!room.isActive) throw new SlotProblem(`${room.name} is not active`);
 
         const endTime = Showtime.computeEndTime(slot.startTime, movie.duration);
-        const gap = turnaroundMinutes * 60 * 1000;
         const near = planned.find((other) => other.auditorium === slot.auditorium
           && other.start < endTime.getTime() + gap && other.end > slot.startTime.getTime() - gap);
-        if (near) throw new SlotProblem(`Clashes with another showing in this same request (${manilaLabel(near.start)}). Allow ${movie.duration} minutes for the movie and ${turnaroundMinutes} minutes between shows; try ${manilaLabel(near.end + gap)} or another room.`);
+        if (near) {
+          throw await clashProblem(
+            `Clashes with another showing in this same request (${manilaLabel(near.start)})`,
+            { title: movie.title, startTime: new Date(near.start), endTime: new Date(near.end), end: near.end, inRequest: true },
+            slot, movie, endTime,
+          );
+        }
         const clash = await findClash({
           auditoriumId: slot.auditorium, startTime: slot.startTime, endTime, turnaroundMinutes, session,
         });
         if (clash) {
-          const otherMovie = await Movie.findById(clash.movie).session(session);
-          throw new SlotProblem(`${room.name}${otherMovie ? `: "${otherMovie.title}"` : ''}. ${clashError(clash, slot.startTime, endTime, turnaroundMinutes).message}. Try ${manilaLabel(clash.endTime.getTime() + gap)} or choose another room.`);
+          const clashMovie = await cached(movies, Movie, String(clash.movie));
+          throw await clashProblem(
+            clashError(clash, slot.startTime, endTime, turnaroundMinutes).message,
+            { title: clashMovie?.title ?? 'Another movie', startTime: clash.startTime, endTime: clash.endTime, end: clash.endTime.getTime() },
+            slot, movie, endTime,
+          );
         }
 
         planned.push({ auditorium: slot.auditorium, start: slot.startTime.getTime(), end: endTime.getTime() });
+        const detail = { movie: slot.movie, auditorium: slot.auditorium, ticketPrice: slot.ticketPrice, published: slot.published };
         if (dryRun) {
-          created.push({ movie: slot.movie, auditorium: slot.auditorium, startTime: slot.startTime, endTime });
+          created.push({ ...detail, startTime: slot.startTime, endTime });
           continue;
         }
         if (!locked.has(slot.auditorium)) {
@@ -138,10 +221,21 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, publishMovie = fals
           isPublished: slot.published,
         });
         await showtime.save({ session });
-        created.push({ _id: showtime._id, movie: slot.movie, auditorium: slot.auditorium, startTime: showtime.startTime, endTime });
+        created.push({ _id: showtime._id, ...detail, startTime: showtime.startTime, endTime });
       } catch (error) {
         if (!(error instanceof SlotProblem)) throw error;
-        skipped.push({ startTime: slot.startTime, label: manilaLabel(slot.startTime), reason: error.message });
+        skipped.push({
+          startTime: slot.startTime,
+          label: manilaLabel(slot.startTime),
+          reason: error.message,
+          kind: error.kind,
+          movie: slot.movie,
+          auditorium: slot.auditorium,
+          ticketPrice: slot.ticketPrice,
+          published: slot.published,
+          ...(error.clash ? { clash: { title: error.clash.title, startTime: error.clash.startTime, endTime: error.clash.endTime, inRequest: Boolean(error.clash.inRequest) } } : {}),
+          ...(error.fixes ? { fixes: error.fixes } : {}),
+        });
       }
     }
 
@@ -155,7 +249,8 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, publishMovie = fals
       throw new HttpError(409, 'No showings could be scheduled. Choose another time or room before publishing.');
     }
     if (publishMovie && !dryRun) {
-      for (const movie of movies.values()) {
+      for (const movieId of new Set(created.map((slot) => slot.movie))) {
+        const movie = movies.get(movieId);
         movie.status = 'published';
         movie.autoArchivedAt = undefined;
         await movie.save({ session });
@@ -166,6 +261,35 @@ async function scheduleSlots(slots, { skipConflicts, dryRun, publishMovie = fals
       ...(publishMovie ? { moviePublished: !dryRun } : {}),
     };
   });
+}
+
+// Schedules exactly the showings listed, each with its own movie, room, start and price. This is
+// how the planner saves a plan after the admin has settled the clashes: every slot is checked again
+// and, unless skipConflicts is set, one that no longer fits fails the whole request.
+async function scheduleExact(body = {}, now = new Date()) {
+  const input = collectErrors((fail) => {
+    const found = { slots: [] };
+    if (!Array.isArray(body.slots) || body.slots.length === 0 || body.slots.length > MAX_SLOTS) {
+      fail('slots', `slots must list 1 to ${MAX_SLOTS} showings`);
+    } else {
+      body.slots.forEach((slot, index) => {
+        const where = `slots[${index}]`;
+        const start = slot && typeof slot.startTime === 'string' ? new Date(slot.startTime) : null;
+        if (!slot || !isObjectId(slot.movie)) fail(where, `${where}.movie must be a movie id`);
+        else if (!isObjectId(slot.auditorium)) fail(where, `${where}.auditorium must be an auditorium id`);
+        else if (!start || Number.isNaN(start.getTime())) fail(where, `${where}.startTime must be a date and time`);
+        else if (!Number.isInteger(slot.ticketPrice) || slot.ticketPrice < 0) fail(where, `${where}.ticketPrice must be a whole number of centavos`);
+        else if (slot.published !== undefined && typeof slot.published !== 'boolean') fail(where, `${where}.published must be true or false`);
+        else found.slots.push({ movie: slot.movie, auditorium: slot.auditorium, startTime: start, ticketPrice: slot.ticketPrice, published: slot.published ?? true });
+      });
+    }
+    for (const flag of ['skipConflicts', 'dryRun', 'publishMovie']) {
+      if (body[flag] !== undefined && typeof body[flag] !== 'boolean') fail(flag, `${flag} must be true or false`);
+    }
+    if (body.publishMovie && found.slots.some((slot) => !slot.published)) fail('publishMovie', 'Showings must be visible when publishing the movie.');
+    return { ...found, publishMovie: body.publishMovie ?? false, skipConflicts: body.skipConflicts ?? false, dryRun: body.dryRun ?? false };
+  });
+  return scheduleSlots(input.slots, { skipConflicts: input.skipConflicts, dryRun: input.dryRun, publishMovie: input.publishMovie, now });
 }
 
 async function bulkSchedule(body, now = new Date()) {
@@ -325,6 +449,20 @@ function readSeats(body, labels) {
 
 const sameSeats = (a, b) => a.length === b.length && a.every((seat, index) => seat === b[index]);
 
+async function protectedRoomSeats(coming, now, session) {
+  const showtime = { $in: coming.map(showing => showing._id) };
+  const claims = await SeatClaim.find({ showtime }).select('seatLabel').session(session);
+  const holds = await Booking.find({ showtime, status: 'pending', holdExpiresAt: { $gt: now } }).select('seats').session(session);
+  return [...new Set([...claims.map(claim => claim.seatLabel), ...holds.flatMap(hold => hold.seats)])].sort();
+}
+
+async function getRoomBlockedSeats(id, now = new Date()) {
+  const auditorium = await Auditorium.findById(id);
+  if (!auditorium) throw new HttpError(404, 'Auditorium not found');
+  const coming = await Showtime.find({ auditorium: id, status: 'scheduled', startTime: { $gt: now } });
+  return { auditorium, protectedSeats: await protectedRoomSeats(coming, now) };
+}
+
 // Replaces the auditorium's blocked seats. A seat cannot be newly blocked while a customer holds
 // it at a coming showing.
 async function setRoomBlockedSeats(id, body = {}, now = new Date()) {
@@ -335,9 +473,9 @@ async function setRoomBlockedSeats(id, body = {}, now = new Date()) {
     const newly = seats.filter((seat) => !(room.blockedSeats || []).includes(seat));
     const coming = await Showtime.find({ auditorium: room._id, status: 'scheduled', startTime: { $gt: now } }).session(session);
     if (newly.length) {
-      const held = await SeatClaim.find({ showtime: { $in: coming.map((s) => s._id) }, seatLabel: { $in: newly } }).session(session);
-      if (held.length) {
-        const labels = [...new Set(held.map((claim) => claim.seatLabel))].sort();
+      const protectedSeats = await protectedRoomSeats(coming, now, session);
+      const labels = newly.filter(seat => protectedSeats.includes(seat));
+      if (labels.length) {
         throw new HttpError(409, `Customers hold ${labels.join(', ')} at coming showings, so those seats cannot be blocked. Cancel or move those bookings first`);
       }
     }
@@ -376,5 +514,5 @@ async function setShowtimeBlockedSeats(id, body = {}, now = new Date()) {
 }
 
 module.exports = {
-  bulkSchedule, copyDay, rescheduleShowtime, setVisibility, setRoomBlockedSeats, setShowtimeBlockedSeats,
+  bulkSchedule, scheduleExact, copyDay, rescheduleShowtime, setVisibility, getRoomBlockedSeats, setRoomBlockedSeats, setShowtimeBlockedSeats,
 };

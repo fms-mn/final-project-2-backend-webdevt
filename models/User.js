@@ -37,6 +37,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // When the account last signed in. A long gap asks for an emailed code (see services/accountAccess.js).
+    lastLoginAt: { type: Date },
+    // Set when the password is reset. Sessions issued before it stop working.
+    passwordChangedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -44,6 +48,7 @@ const userSchema = new mongoose.Schema(
       // Password hashes must never appear in an API response.
       transform: (doc, ret) => {
         delete ret.passwordHash;
+        delete ret.passwordChangedAt;
         delete ret.__v;
         return ret;
       },

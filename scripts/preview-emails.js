@@ -40,6 +40,9 @@ const emails = [
   ['showing-cancelled', 'Showing cancelled by the cinema', templates.showingCancelled(sample, { name, refunded: true })],
   ['showing-moved', 'Showing moved', templates.showingMoved(sample, { name, before })],
   ['reminder', 'Reminder before the showing', templates.reminder(sample, { name, when: 'tomorrow at 2:00 PM' })],
+  ['password-reset', 'Forgot password: the reset link', templates.passwordReset({ name, url: 'https://filme.example/reset-password?token=sample', minutes: 60 })],
+  ['password-changed', 'Password changed notice', templates.passwordChanged({ name })],
+  ['login-code', 'Sign-in code after a long time away', templates.loginCode({ name, code: '482 913'.replace(' ', ''), minutes: 10 })],
   ['test', 'Test email from the admin page', templates.testEmail({ to: 'boss@example.com', providerLabel: 'Brevo', at: 'Oct 16, 2026, 1:30 PM' })],
 ];
 

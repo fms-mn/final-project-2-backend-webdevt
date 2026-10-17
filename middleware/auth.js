@@ -78,6 +78,10 @@ const auth = wrap(async (req, res, next) => {
 
   const user = await User.findById(decoded.id).select('-passwordHash');
   if (!user) throw new HttpError(401, 'Your session is invalid or has expired. Please sign in again.');
+  // A password reset signs the account out everywhere: sessions issued before it no longer count.
+  if (user.passwordChangedAt && decoded.iat < Math.floor(new Date(user.passwordChangedAt).getTime() / 1000)) {
+    throw new HttpError(401, 'Your session is invalid or has expired. Please sign in again.');
+  }
   // Checked on every request, so deactivating an account also cuts off sessions already issued.
   if (!user.isActive) throw new HttpError(403, 'Account is deactivated');
 

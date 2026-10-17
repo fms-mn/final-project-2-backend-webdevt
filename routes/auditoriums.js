@@ -64,6 +64,11 @@ router.patch('/:id', adminAuth, wrap(async (req, res) => {
   res.json(auditorium);
 }));
 
+router.get('/:id/blocked-seats', adminAuth, wrap(async (req, res) => {
+  requireId(req.params.id, 'Auditorium');
+  res.json(await scheduling.getRoomBlockedSeats(req.params.id));
+}));
+
 // Replace the seats that cannot be booked in any showing here: { "seats": ["A1", "A2"] }.
 router.put('/:id/blocked-seats', adminAuth, wrap(async (req, res) => {
   requireId(req.params.id, 'Auditorium');
