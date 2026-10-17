@@ -53,6 +53,9 @@ const bookingSchema = new mongoose.Schema(
     paymentStatus: { type: String, enum: ['unpaid', 'paid', 'refunded'] },
     bookedAt: { type: Date, required: true, default: Date.now },
     cancelledAt: { type: Date, default: null },
+    // When the confirmation and the reminder emails went out, so neither is sent twice.
+    emailConfirmedAt: { type: Date },
+    emailReminderAt: { type: Date },
   },
   { timestamps: true },
 );

@@ -58,6 +58,26 @@ module.exports = {
   //   PAYMENT_DELAY_MS        pretend processing time of the simulated gateway (default 900)
   get paymentRequired() { return process.env.PAYMENT_REQUIRED !== 'false'; },
   get holdMinutes() { return positiveNumber(process.env.HOLD_MINUTES, 5); },
+  // Emails (services/mail). Read each time so a test can change them.
+  //   MAIL_PROVIDER   brevo | resend | log | memory. Chosen by itself when a key is set (BREVO_API_KEY or
+  //                   RESEND_API_KEY); without one, emails are only written to a folder (development) or logged.
+  //   MAIL_FROM       the sender address. Brevo only sends from an address you verified there.
+  //   MAIL_FROM_NAME  the sender name customers see (default "filme").
+  //   APP_URL         the public address of the website, for the buttons and the logo in emails.
+  //   REMINDER_HOURS  how long before a showing the reminder email goes out (default 3).
+  get mail() {
+    const env = process.env;
+    const detected = env.BREVO_API_KEY ? 'brevo' : env.RESEND_API_KEY ? 'resend' : (env.NODE_ENV === 'test' ? 'memory' : 'log');
+    return {
+      provider: (env.MAIL_PROVIDER || detected).trim().toLowerCase(),
+      brevoKey: env.BREVO_API_KEY || '',
+      resendKey: env.RESEND_API_KEY || '',
+      fromEmail: (env.MAIL_FROM || '').trim(),
+      fromName: (env.MAIL_FROM_NAME || 'filme').trim(),
+      appUrl: (env.APP_URL || '').trim().replace(/\/+$/, ''),
+      reminderHours: positiveNumber(env.REMINDER_HOURS, 3),
+    };
+  },
   get paymentDelayMs() {
     const value = Number(process.env.PAYMENT_DELAY_MS);
     return process.env.PAYMENT_DELAY_MS !== undefined && Number.isFinite(value) && value >= 0 ? value : 900;

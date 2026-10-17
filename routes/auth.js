@@ -1,6 +1,7 @@
 const express = require('express');
 const passwords = require('../services/passwords');
 const config = require('../config');
+const notifications = require('../services/mail/notifications');
 const User = require('../models/User');
 const { startSession, endSession } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/rateLimit');
@@ -54,6 +55,7 @@ router.post('/register', wrap(async (req, res) => {
     throw error;
   }
 
+  notifications.welcome(user._id); // sent in the background; a failure never stops the sign-up
   const csrfToken = startSession(res, user);
   res.status(201).json({ user, csrfToken });
 }));
