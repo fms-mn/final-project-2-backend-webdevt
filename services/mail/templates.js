@@ -229,4 +229,24 @@ function accountRemoved({ name }) {
   };
 }
 
-module.exports = { welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, reminder, testEmail, passwordReset, passwordChanged, loginCode, accountRemoved };
+// ---- 12. a coming-soon movie is about to open: the reminder the customer asked for -------------
+function comingSoonReminder(m, { name, when, advanceTickets }) {
+  const openLine = `${m.movieTitle} opens ${when}`;
+  const html = shell({
+    preheader: `${openLine}. You asked us to remind you.`,
+    rowsHtml: hero({
+      chip: 'Opening soon', tone: 'info', title: openLine,
+      lead: `Hi ${esc(firstName(name))}, you asked us to remind you before ${strongHtml(m.movieTitle)} opens, and that is ${esc(when)}.`,
+    })
+      + movieCard(m)
+      + rows([['Opens', esc(m.releaseLong)]], { title: 'Details' })
+      + notice({ tone: 'ok', title: advanceTickets ? 'Tickets are on sale' : 'Showtimes are coming', text: advanceTickets ? 'Pick your seats now so you are not stuck with what is left.' : 'Showtimes are not posted yet. Check the movie page for them as soon as they are.' })
+      + button(link(`/movie/${m.movieId}`), advanceTickets ? 'Book tickets' : 'See the movie'),
+  });
+  return {
+    subject: `Reminder: ${openLine}`, html, tags: ['coming-soon-reminder'],
+    text: text([openLine, '', `Hi ${firstName(name)}, you asked us to remind you before this movie opens.`, `Opens: ${m.releaseLong}`, advanceTickets ? 'Tickets are on sale now.' : 'Showtimes are not posted yet.', link(`/movie/${m.movieId}`) && `Movie page: ${link(`/movie/${m.movieId}`)}`]),
+  };
+}
+
+module.exports = { welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, reminder, testEmail, passwordReset, passwordChanged, loginCode, accountRemoved, comingSoonReminder };

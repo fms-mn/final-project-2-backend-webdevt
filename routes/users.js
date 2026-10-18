@@ -4,6 +4,7 @@ const User = require('../models/User');
 const Booking = require('../models/Booking');
 const Showtime = require('../models/Showtime');
 const AuthToken = require('../models/AuthToken');
+const MovieReminder = require('../models/MovieReminder');
 const notifications = require('../services/mail/notifications');
 const { auth, adminAuth } = require('../middleware/auth');
 const { HttpError, wrap } = require('../utils/http');
@@ -92,6 +93,7 @@ router.delete('/:id', adminAuth, wrap(async (req, res) => {
 
   const { name, email } = target;
   await AuthToken.deleteMany({ user: target._id });
+  await MovieReminder.deleteMany({ user: target._id });
   await User.deleteOne({ _id: target._id });
   notifications.accountRemoved({ name, email });
   res.json({ removed: true, id: String(target._id) });

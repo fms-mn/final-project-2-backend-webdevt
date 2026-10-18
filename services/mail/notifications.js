@@ -4,6 +4,7 @@ const Movie = require('../../models/Movie');
 const Auditorium = require('../../models/Auditorium');
 const Payment = require('../../models/Payment');
 const User = require('../../models/User');
+const MovieReminder = require('../../models/MovieReminder');
 const config = require('../../config');
 const { manilaDay } = require('../../utils/manila');
 const { sendMail, notify, status } = require('./index');
@@ -175,6 +176,27 @@ async function sendReminder(bookingId, now = new Date()) {
   return Boolean(result.ok);
 }
 
+// A coming-soon movie opens within the reminder window: the one email a customer asked for.
+// Returns whether it went out. The row is marked afterwards, so a failed send is tried again.
+async function sendMovieReminder(reminderId, now = new Date()) {
+  const reminder = await MovieReminder.findById(reminderId);
+  if (!reminder || reminder.remindedAt) return false;
+  const [user, movie] = await Promise.all([User.findById(reminder.user), Movie.findById(reminder.movie)]);
+  if (!user || !user.isActive || !movie || movie.status !== 'published') return false;
+  const { withShowingInfo } = require('../movieShowings');
+  const [info] = await withShowingInfo([{ _id: movie._id, releaseDate: movie.releaseDate }], now);
+  const genre = Array.isArray(movie.genre) ? movie.genre[0] : movie.genre;
+  const days = Math.round((Date.parse(`${manilaDay(movie.releaseDate)}T00:00:00Z`) - Date.parse(`${manilaDay(now)}T00:00:00Z`)) / 86400000);
+  const when = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+  const mail = templates.comingSoonReminder({
+    movieId: idOf(movie), movieTitle: movie.title, posterUrl: movie.posterUrl || '', rating: movie.rating || '', genre: genre || '',
+    durationLabel: lengthOf(movie.duration), releaseLong: dayLong(movie.releaseDate),
+  }, { name: user.name, when, advanceTickets: (info?.upcomingShowings ?? 0) > 0 });
+  const result = await sendMail({ to: user.email, toName: user.name, ...mail });
+  if (result.ok) await MovieReminder.updateOne({ _id: reminder._id }, { $set: { remindedAt: new Date() } });
+  return Boolean(result.ok);
+}
+
 // The admin's "send me a test email" button. Answers with what happened, so the page can show it.
 async function sendTest(to) {
   const info = status();
@@ -187,7 +209,7 @@ async function sendTest(to) {
 }
 
 module.exports = {
-  welcome, passwordReset, passwordChanged, accountRemoved, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, sendReminder, sendTest,
+  welcome, passwordReset, passwordChanged, accountRemoved, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, sendReminder, sendMovieReminder, sendTest,
   // exposed for the preview script and tests
   ticketOf, money, whenPhrase,
 };

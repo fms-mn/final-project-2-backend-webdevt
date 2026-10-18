@@ -65,6 +65,7 @@ module.exports = {
   //   MAIL_FROM_NAME  the sender name customers see (default "filme").
   //   APP_URL         the public address of the website, for the buttons and the logo in emails.
   //   REMINDER_HOURS  how long before a showing the reminder email goes out (default 3).
+  //   RELEASE_REMINDER_DAYS  how many days before a coming-soon movie opens its reminder email goes out (default 1).
   // Account access (services/accountAccess.js). Read each time so a test can change them.
   //   RESET_MINUTES        how long a password reset link works (default 60)
   //   LOGIN_CODE_MINUTES   how long an emailed sign-in code works (default 10)
@@ -87,6 +88,7 @@ module.exports = {
       fromName: (env.MAIL_FROM_NAME || 'filme').trim(),
       appUrl: (env.APP_URL || '').trim().replace(/\/+$/, ''),
       reminderHours: positiveNumber(env.REMINDER_HOURS, 3),
+      releaseReminderDays: Math.max(1, Math.floor(positiveNumber(env.RELEASE_REMINDER_DAYS, 1))),
     };
   },
   get paymentDelayMs() {
