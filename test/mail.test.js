@@ -20,6 +20,7 @@ const SeatClaim = require('../models/SeatClaim');
 const Payment = require('../models/Payment');
 const Setting = require('../models/Setting');
 const LoginAttempt = require('../models/LoginAttempt');
+const AuthToken = require('../models/AuthToken');
 const mail = require('../services/mail');
 const { sendDueReminders } = require('../services/mail/reminders');
 const templates = require('../services/mail/templates');
@@ -103,6 +104,7 @@ test.before(async () => {
   fakeModel(Payment, payments, { uniqueOn: 'reference' });
   fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
+  fakeModel(AuthToken, []);
   fakeTransactions({
     stores: [bookings, claims, showtimes, auditoriums, settings, payments],
   });
@@ -368,4 +370,31 @@ test('admin email page: status and a test email to the signed-in admin only', as
   assert.equal(test.data.to, 'boss@example.com', 'it goes to the admin, whatever the request says');
   assert.deepEqual(mail.sent.map((message) => message.to), ['boss@example.com']);
   assert.match(mail.sent[0].subject, /test email/);
+});
+
+test('an admin removing an account deletes it and emails the owner; admins and customers with upcoming tickets are protected', async () => {
+  const admin = await signIn('boss', 'admin');
+  const ann = await signIn('ann');
+  const bob = await signIn('bob');
+  const show = addShow(addMovie(), addHall(), soon(2 * DAY));
+  await bookAndPay(bob, show, ['A1']);
+  mail.sent.length = 0;
+
+  assert.equal((await call('DELETE', `/api/users/${ann.user._id}`, { session: bob })).status, 403, 'a customer cannot remove accounts');
+  assert.equal((await call('DELETE', `/api/users/${admin.user._id}`, { session: admin })).status, 403, 'an admin account cannot be removed');
+  const blocked = await call('DELETE', `/api/users/${bob.user._id}`, { session: admin });
+  assert.equal(blocked.status, 409);
+  assert.match(blocked.data.message, /1 upcoming booking/);
+  assert.ok(users.includes(bob.user), 'still there');
+  await mail.idle();
+  assert.equal(mail.sent.length, 0, 'nothing is sent when the removal is refused');
+
+  const removed = await call('DELETE', `/api/users/${ann.user._id}`, { session: admin });
+  assert.equal(removed.status, 200);
+  assert.ok(!users.some((user) => String(user._id) === String(ann.user._id)), 'the account is gone');
+  await mail.idle();
+  assert.equal(sentTo('ann@example.com').length, 1);
+  assert.equal(sentTo('ann@example.com')[0].subject, 'Your filme account was removed');
+  assert.match(sentTo('ann@example.com')[0].html, /administrator has removed your account/);
+  assert.equal((await call('DELETE', `/api/users/${ann.user._id}`, { session: admin })).status, 404, 'removing it twice finds nothing');
 });

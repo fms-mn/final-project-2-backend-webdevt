@@ -102,6 +102,12 @@ const passwordChanged = (userId) => notify(async () => {
   await sendMail({ to: user.email, toName: user.name, ...templates.passwordChanged({ name: user.name }) });
 });
 
+// An administrator removed an account. The account no longer exists, so the name and email are
+// passed in (read before it was deleted) instead of being looked up.
+const accountRemoved = ({ name, email }) => notify(async () => {
+  await sendMail({ to: email, toName: name, ...templates.accountRemoved({ name }) });
+});
+
 // A booking was paid for (or booked with payments switched off). Sent once per booking.
 const bookingConfirmed = (bookingId) => notify(async () => {
   const data = await loadBooking(bookingId);
@@ -181,7 +187,7 @@ async function sendTest(to) {
 }
 
 module.exports = {
-  welcome, passwordReset, passwordChanged, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, sendReminder, sendTest,
+  welcome, passwordReset, passwordChanged, accountRemoved, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, sendReminder, sendTest,
   // exposed for the preview script and tests
   ticketOf, money, whenPhrase,
 };

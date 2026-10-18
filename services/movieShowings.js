@@ -21,35 +21,40 @@ function showStatusOf(movie, upcomingShowings, now) {
 }
 
 // `movies` are plain objects with an `_id` and a `releaseDate`; returns copies with the fields added.
-async function withShowingInfo(movies, now = new Date()) {
+async function withShowingInfo(movies, now = new Date(), { admin = false } = {}) {
   if (movies.length === 0) return [];
   const { salesCutoffMinutes } = await getSettings();
   const bookableFrom = new Date(now.getTime() + salesCutoffMinutes * 60 * 1000);
   const showings = await Showtime.find({
     movie: { $in: movies.map((movie) => movie._id) },
     status: 'scheduled',
-    isPublished: { $ne: false },
-    startTime: { $gt: bookableFrom },
-  }).select('movie startTime ticketPrice');
+    ...(admin ? {} : { isPublished: { $ne: false } }),
+    startTime: { $gt: admin ? now : bookableFrom },
+  }).select('movie startTime ticketPrice isPublished');
 
   const byMovie = new Map();
   for (const showing of showings) {
     const key = String(showing.movie);
-    const entry = byMovie.get(key) || { count: 0, next: null, cheapest: null };
-    entry.count += 1;
-    if (!entry.next || showing.startTime < entry.next) entry.next = showing.startTime;
-    if (entry.cheapest === null || showing.ticketPrice < entry.cheapest) entry.cheapest = showing.ticketPrice;
+    const entry = byMovie.get(key) || { count: 0, scheduled: 0, hidden: 0, next: null, cheapest: null };
+    entry.scheduled += 1;
+    if (showing.isPublished === false) entry.hidden += 1;
+    if (showing.isPublished !== false && showing.startTime > bookableFrom) {
+      entry.count += 1;
+      if (!entry.next || showing.startTime < entry.next) entry.next = showing.startTime;
+      if (entry.cheapest === null || showing.ticketPrice < entry.cheapest) entry.cheapest = showing.ticketPrice;
+    }
     byMovie.set(key, entry);
   }
 
   return movies.map((movie) => {
-    const entry = byMovie.get(String(movie._id)) || { count: 0, next: null, cheapest: null };
+    const entry = byMovie.get(String(movie._id)) || { count: 0, scheduled: 0, hidden: 0, next: null, cheapest: null };
     return {
       ...movie,
       upcomingShowings: entry.count,
       nextShowing: entry.next,
       fromPrice: entry.cheapest,
       showStatus: showStatusOf(movie, entry.count, now),
+      ...(admin ? { scheduledShowings: entry.scheduled, hiddenShowings: entry.hidden } : {}),
     };
   });
 }

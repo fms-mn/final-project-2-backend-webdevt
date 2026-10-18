@@ -215,4 +215,18 @@ function loginCode({ name, code, minutes }) {
   };
 }
 
-module.exports = { welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, reminder, testEmail, passwordReset, passwordChanged, loginCode };
+// ---- 11. account removed by an administrator ---------------------------------------------------
+function accountRemoved({ name }) {
+  const html = shell({
+    preheader: 'Your filme account has been removed.',
+    rowsHtml: hero({ chip: 'Account removed', tone: 'down', title: 'Your account was removed', lead: `Hi ${firstName(name)}, a filme administrator has removed your account. You can no longer sign in with this email, and you will not get any more emails from us about it.` })
+      + notice({ tone: 'info', title: 'Think this is a mistake?', text: 'Contact the cinema and we will look into it. You are always welcome to create a new account.' })
+      + button(link('/register'), 'Create a new account'),
+  });
+  return {
+    subject: 'Your filme account was removed', html, tags: ['account-removed'],
+    text: text([`Hi ${firstName(name)},`, '', 'A filme administrator has removed your account. You can no longer sign in with this email.', 'Think this is a mistake? Contact the cinema and we will look into it.', link('/register') && `Create a new account: ${link('/register')}`]),
+  };
+}
+
+module.exports = { welcome, bookingConfirmed, bookingCancelled, showingCancelled, showingMoved, reminder, testEmail, passwordReset, passwordChanged, loginCode, accountRemoved };
