@@ -20,9 +20,10 @@ const SeatClaim = require('../models/SeatClaim');
 const Setting = require('../models/Setting');
 const LoginAttempt = require('../models/LoginAttempt');
 const AuthToken = require('../models/AuthToken');
+const MovieReminder = require('../models/MovieReminder');
 const Payment = require('../models/Payment');
 
-const MODELS = [User, Movie, Auditorium, Showtime, Booking, SeatClaim, Setting, LoginAttempt, Payment, AuthToken];
+const MODELS = [User, Movie, Auditorium, Showtime, Booking, SeatClaim, Setting, LoginAttempt, Payment, AuthToken, MovieReminder];
 
 async function main() {
   if (!process.env.MONGODB_URI) {

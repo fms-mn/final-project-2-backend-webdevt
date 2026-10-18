@@ -21,8 +21,9 @@ const Payment = require('../models/Payment');
 const Setting = require('../models/Setting');
 const LoginAttempt = require('../models/LoginAttempt');
 const AuthToken = require('../models/AuthToken');
+const MovieReminder = require('../models/MovieReminder');
 const mail = require('../services/mail');
-const { sendDueReminders } = require('../services/mail/reminders');
+const { sendDueReminders, sendDueReleaseReminders } = require('../services/mail/reminders');
 const templates = require('../services/mail/templates');
 const { manilaDay } = require('../utils/manila');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
@@ -41,11 +42,12 @@ const bookings = [];
 const claims = [];
 const payments = [];
 const settings = [];
+const reminders = [];
 let server;
 let base;
 let passwordHash;
 
-const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings, payments].forEach((rows) => { rows.length = 0; });
+const clear = () => [users, movies, auditoriums, showtimes, bookings, claims, settings, payments, reminders].forEach((rows) => { rows.length = 0; });
 const day = (n) => manilaDay(Date.now() + n * DAY); // a Manila calendar day, n days from today
 
 function add(Model, rows, fields) {
@@ -105,6 +107,7 @@ test.before(async () => {
   fakeModel(Setting, settings, { uniqueOn: 'key' });
   fakeModel(LoginAttempt, [], { uniqueOn: 'key' });
   fakeModel(AuthToken, []);
+  fakeModel(MovieReminder, reminders, { uniqueOn: ['user', 'movie'] });
   fakeTransactions({
     stores: [bookings, claims, showtimes, auditoriums, settings, payments],
   });
@@ -397,4 +400,68 @@ test('an admin removing an account deletes it and emails the owner; admins and c
   assert.equal(sentTo('ann@example.com')[0].subject, 'Your filme account was removed');
   assert.match(sentTo('ann@example.com')[0].html, /administrator has removed your account/);
   assert.equal((await call('DELETE', `/api/users/${ann.user._id}`, { session: admin })).status, 404, 'removing it twice finds nothing');
+});
+
+test('a customer can ask to be reminded about a coming-soon movie, and only about one', async () => {
+  const ann = await signIn('ann');
+  const boss = await signIn('boss', 'admin');
+  const later = addMovie({ title: 'Later', releaseDate: soon(10 * DAY) });
+  const opened = addMovie({ title: 'Opened', releaseDate: soon(-2 * DAY) });
+  const draft = addMovie({ title: 'Draft', releaseDate: soon(10 * DAY), status: 'draft' });
+
+  assert.equal((await call('PUT', `/api/reminders/${later._id}`)).status, 401, 'sign in first');
+  assert.equal((await call('PUT', `/api/reminders/${later._id}`, { session: boss })).status, 403, 'an admin has no reminders');
+  assert.equal((await call('PUT', `/api/reminders/${opened._id}`, { session: ann })).status, 409, 'it already opened');
+  assert.equal((await call('PUT', `/api/reminders/${draft._id}`, { session: ann })).status, 404, 'customers cannot see a draft');
+
+  assert.equal((await call('PUT', `/api/reminders/${later._id}`, { session: ann })).data.reminding, true);
+  assert.equal((await call('PUT', `/api/reminders/${later._id}`, { session: ann })).status, 200, 'asking twice is harmless');
+  assert.equal(reminders.length, 1);
+  assert.deepEqual((await call('GET', '/api/reminders', { session: ann })).data.movieIds, [String(later._id)]);
+  assert.equal((await call('DELETE', `/api/reminders/${later._id}`, { session: ann })).data.reminding, false);
+  assert.equal(reminders.length, 0);
+});
+
+test('the reminder email goes out once, only when the movie is about to open', async () => {
+  const ann = await signIn('ann');
+  const far = addMovie({ title: 'Far Away', releaseDate: soon(10 * DAY) });
+  const near = addMovie({ title: 'Tomorrow Film', releaseDate: soon(DAY) });
+  for (const movie of [far, near]) assert.equal((await call('PUT', `/api/reminders/${movie._id}`, { session: ann })).status, 200);
+  mail.sent.length = 0;
+
+  const first = await sendDueReleaseReminders();
+  await mail.idle();
+  assert.equal(first.sent, 1);
+  assert.equal(mail.sent.length, 1, 'nothing for the movie that is still far away');
+  assert.equal(mail.sent[0].to, 'ann@example.com');
+  assert.match(mail.sent[0].subject, /Reminder: Tomorrow Film opens tomorrow/);
+  assert.match(mail.sent[0].html, /Showtimes are coming/, 'no showings yet');
+
+  assert.equal((await sendDueReleaseReminders()).sent, 0, 'not sent twice');
+  assert.equal(mail.sent.length, 1);
+
+  const later = await sendDueReleaseReminders(new Date(Date.now() + 9.5 * DAY));
+  await mail.idle();
+  assert.equal(later.sent, 1, 'the far movie is reminded once it is close');
+  assert.match(mail.sent[1].subject, /Far Away opens/);
+});
+
+test('the reminder says tickets are on sale when the movie has showings, and removed accounts are not emailed', async () => {
+  const ann = await signIn('ann');
+  const bob = await signIn('bob');
+  const admin = await signIn('boss', 'admin');
+  const film = addMovie({ title: 'Presale', releaseDate: soon(DAY) });
+  addShow(film, addHall(), soon(2 * DAY));
+  await call('PUT', `/api/reminders/${film._id}`, { session: ann });
+  await call('PUT', `/api/reminders/${film._id}`, { session: bob });
+  assert.equal((await call('DELETE', `/api/users/${bob.user._id}`, { session: admin })).status, 200);
+  assert.equal(reminders.length, 1, 'the removed account lost its reminder');
+  mail.sent.length = 0;
+
+  await sendDueReleaseReminders();
+  await mail.idle();
+  assert.equal(mail.sent.length, 1);
+  assert.equal(mail.sent[0].to, 'ann@example.com');
+  assert.match(mail.sent[0].html, /Tickets are on sale/);
+  assert.match(mail.sent[0].html, /Book tickets/);
 });
