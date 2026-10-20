@@ -363,3 +363,61 @@ test('cancel: an admin may cancel anyone\'s booking; nobody after the showtime h
   assert.equal(claims.length, 1, 'the late cancellation freed nothing');
   assert.equal((await call('PATCH', '/api/bookings/nope/cancel', { session: ann })).status, 404);
 });
+
+
+test('customer scoped pages classify, search and sort before pagination with exact totals and ownership', async () => {
+  const { movie, hall, showtime } = world();
+  const past = addShowtime(movie, hall, -DAY);
+  const ann = await signIn('paged-ann'), bob = await signIn('paged-bob');
+  const target = add(Movie, movies, { ...movie.toObject(), _id: undefined, title: 'Rare [film]' });
+  const targetShow = addShowtime(target, hall, -2 * DAY);
+  const made = [];
+  for (let i = 0; i < 125; i++) made.push(add(Booking, bookings, {
+    user: ann.user._id, showtime: i === 124 ? targetShow._id : past._id,
+    seats: ['A1'], unitPrice: 40000, totalAmount: 40000,
+    status: i % 2 ? 'confirmed' : 'cancelled', bookingCode: 'FLM-PAGE-' + i,
+    bookedAt: new Date(T0 - i * HOUR),
+  }));
+  add(Booking, bookings, { user: bob.user._id, showtime: past._id, seats: ['A1'], unitPrice: 40000, totalAmount: 40000, bookingCode: 'FLM-PRIVATE' });
+  const upcoming = add(Booking, bookings, { user: ann.user._id, showtime: showtime._id, seats: ['B1'], unitPrice: 40000, totalAmount: 40000, bookingCode: 'FLM-UPCOMING' });
+  add(Booking, bookings, { user: ann.user._id, showtime: showtime._id, status: 'pending', seats: ['B2'], unitPrice: 40000, totalAmount: 40000, bookingCode: 'FLM-HOLD' });
+  const get = query => call('GET', '/api/bookings/my?scope=history&limit=5&' + query, { session: ann });
+  assert.equal((await call('GET', '/api/bookings/my?scope=history')).status, 401);
+  const first = await get('page=1&user=' + bob.user._id);
+  assert.equal(first.status, 200, JSON.stringify(first.data));
+  assert.equal(first.data.records.length, 5);
+  assert.equal(first.data.total, 125);
+  assert.equal(first.data.overallTotal, 125);
+  assert.equal(first.data.hasMore, true);
+  assert.equal(first.data.nextPage, 2);
+  assert.equal(Object.values(first.data.dayCounts).reduce((a, b) => a + b, 0), 125);
+  const second = await get('page=2');
+  assert.equal(second.data.records.length, 5);
+  assert.equal(new Set([...first.data.records, ...second.data.records].map(b => b._id)).size, 10);
+  const sortedIds = made.slice(0, 124).map(b => String(b._id)).sort();
+  assert.deepEqual(first.data.records.map(b => b._id), sortedIds.slice(0, 5), 'showtime ties use stable ascending booking ids, not bookedAt');
+  const search = await get('search=' + encodeURIComponent('rare [FILM]'));
+  assert.equal(search.data.total, 1, 'literal movie title search reaches a record beyond the first 100');
+  assert.equal(search.data.records[0].bookingCode, 'FLM-PAGE-124');
+  assert.equal((await get('search=FLM-PAGE-124')).data.total, 1);
+  assert.equal((await get('search=PRIVATE')).data.total, 0);
+  assert.equal((await get('filter=cancelled')).data.total, 63);
+  assert.equal((await get('filter=past')).data.total, 62);
+  assert.equal((await get('order=oldest')).data.records[0].bookingCode, 'FLM-PAGE-124');
+  const last = await get('page=25');
+  assert.equal(last.data.records.length, 5); assert.equal(last.data.hasMore, false); assert.equal(last.data.nextPage, null);
+  const next = await call('GET', '/api/bookings/my?scope=upcoming&limit=50', { session: ann });
+  assert.equal(next.data.total, 1); assert.equal(next.data.records[0]._id, String(upcoming._id));
+  const cancelled = await call('PATCH', '/api/bookings/' + upcoming._id + '/cancel', { session: ann });
+  assert.equal(cancelled.status, 200);
+  assert.equal((await get('filter=cancelled')).data.total, 64);
+  assert.equal((await get('')).data.records[0]._id, String(upcoming._id), 'future cancellation appears by showtime ordering');
+  assert.equal((await get('filter=past')).data.total, 62);
+  assert.equal((await call('GET', '/api/bookings/my?scope=upcoming', { session: ann })).data.total, 0);
+  for (const query of ['scope=wrong', 'scope=history&filter=watched', 'scope=history&order=wrong', 'scope=history&search=' + 'x'.repeat(201)]) {
+    assert.equal((await call('GET', '/api/bookings/my?' + query, { session: ann })).status, 400);
+  }
+  const missing = add(Booking, bookings, { user: ann.user._id, showtime: new Showtime()._id, status: 'cancelled', seats: ['A1'], unitPrice: 40000, totalAmount: 40000, bookingCode: 'FLM-MISSING' });
+  assert.equal((await get('search=MISSING')).data.records[0]._id, String(missing._id));
+  assert.deepEqual((await get('search=MISSING')).data.dayCounts, { unknown: 1 });
+});
