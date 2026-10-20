@@ -6,6 +6,7 @@ const { HttpError, wrap } = require('../utils/http');
 const { isObjectId, requireId, dayRange, badRequest } = require('../utils/validate');
 const service = require('../services/bookings');
 const payments = require('../services/payments');
+const { customerBookingPage } = require('../services/customerBookingPages');
 
 const router = express.Router();
 
@@ -38,6 +39,9 @@ router.post('/', auth, wrap(async (req, res) => {
 // The signed-in customer's own bookings, newest first. Cancelled ones stay in the list.
 router.get('/my', auth, wrap(async (req, res) => {
   const { limit, page } = pageOptions(req.query);
+  if (req.query.scope !== undefined) {
+    return res.json(await customerBookingPage(req.user._id, req.query, { limit, page }));
+  }
   const bookings = await Booking.find({ user: req.user._id, ...statusFilter(req.query) })
     .sort({ bookedAt: -1, _id: -1 }).skip((page - 1) * limit).limit(limit);
   res.json(await service.describeBookings(bookings));

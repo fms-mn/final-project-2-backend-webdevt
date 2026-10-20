@@ -1,7 +1,7 @@
 // A tiny in-memory stand-in for MongoDB, used by the offline tests. It patches the real Mongoose
 // models, so schema validation, defaults and pre-validate hooks (seat label generation, price
 // and time checks) still run for real. Only the query features the routes use are implemented:
-// equality, $in, $ne, $gt, $gte, $lt, $lte, $regex, sort, skip, limit, select, session.
+// equality, boolean filters, comparisons, regex, sort/paging and the scoped booking aggregation.
 const test = require('node:test');
 const mongoose = require('mongoose');
 
@@ -16,6 +16,7 @@ function matchesCondition(value, condition) {
     && !Array.isArray(condition) && Object.keys(condition).some((key) => key.startsWith('$'));
   if (!isOperators) return same(value, condition);
   return Object.entries(condition).every(([operator, operand]) => {
+    if (operand instanceof Date && ['$gt', '$gte', '$lt', '$lte'].includes(operator) && !(value instanceof Date)) return false;
     switch (operator) {
       case '$in': return operand.some((item) => same(value, item));
       case '$ne': return !same(value, operand);
@@ -23,16 +24,63 @@ function matchesCondition(value, condition) {
       case '$gte': return asNumber(value) >= asNumber(operand);
       case '$lt': return asNumber(value) < asNumber(operand);
       case '$lte': return asNumber(value) <= asNumber(operand);
-      case '$regex': return new RegExp(operand, condition.$options).test(String(value));
+      case '$regex': return typeof value === 'string' && new RegExp(operand, condition.$options).test(value);
       case '$options': return true;
       default: throw new Error(`fakeDb does not support ${operator}`);
     }
   });
 }
 
-const matches = (doc, filter = {}) => Object.entries(filter).every(
-  ([key, condition]) => matchesCondition(doc[key], condition),
-);
+const field = (doc, path) => path.split('.').reduce((value, key) => value?.[key], doc);
+const matches = (doc, filter = {}) => Object.entries(filter).every(([key, condition]) => (
+  key === '$or' ? condition.some(item => matches(doc, item))
+    : key === '$and' ? condition.every(item => matches(doc, item)) : matchesCondition(field(doc, key), condition)
+));
+
+const collections = new Map();
+const compare = (a, b) => a instanceof Date || b instanceof Date ? asNumber(a) - asNumber(b)
+  : typeof a === 'number' && typeof b === 'number' ? a - b : String(a ?? '').localeCompare(String(b ?? ''));
+const sorted = (rows, spec) => rows.sort((a, b) => {
+  for (const [key, direction] of Object.entries(spec)) { const difference = compare(field(a, key), field(b, key)); if (difference) return difference * direction; }
+  return 0;
+});
+function expression(doc, value) {
+  if (typeof value === 'string' && value.startsWith('$')) return field(doc, value.slice(1));
+  if (value?.$ifNull) return expression(doc, value.$ifNull[0]) ?? expression(doc, value.$ifNull[1]);
+  if (value?.$dateToString) {
+    const options = value.$dateToString, date = expression(doc, options.date);
+    return date ? new Date(date).toLocaleDateString('en-CA', { timeZone: options.timezone }) : options.onNull;
+  }
+  return value;
+}
+function aggregate(rows, pipeline) {
+  for (const stage of pipeline) {
+    const [name, options] = Object.entries(stage)[0];
+    switch (name) {
+      case '$match': rows = rows.filter(doc => matches(doc, options)); break;
+      case '$lookup': rows = rows.map(doc => ({ ...doc, [options.as]: (collections.get(options.from) || []).filter(joined => same(field(doc, options.localField), field(joined, options.foreignField))).map(joined => joined.toObject()) })); break;
+      case '$unwind': {
+        const key = options.path.slice(1);
+        rows = rows.flatMap(doc => doc[key]?.length ? doc[key].map(value => ({ ...doc, [key]: value })) : options.preserveNullAndEmptyArrays ? [{ ...doc, [key]: null }] : []);
+        break;
+      }
+      case '$set': rows = rows.map(doc => ({ ...doc, ...Object.fromEntries(Object.entries(options).map(([key, value]) => [key, expression(doc, value)])) })); break;
+      case '$sort': rows = sorted([...rows], options); break;
+      case '$skip': rows = rows.slice(options); break;
+      case '$limit': rows = rows.slice(0, options); break;
+      case '$count': rows = rows.length ? [{ [options]: rows.length }] : []; break;
+      case '$facet': rows = [Object.fromEntries(Object.entries(options).map(([key, steps]) => [key, aggregate([...rows], steps)]))]; break;
+      case '$group': {
+        const groups = new Map();
+        for (const doc of rows) { const key = expression(doc, options._id); groups.set(key, (groups.get(key) || 0) + 1); }
+        rows = [...groups].map(([_id, total]) => ({ _id, total }));
+        break;
+      }
+      default: throw new Error(`fakeDb aggregate does not support ${name}`);
+    }
+  }
+  return rows;
+}
 
 function query(getRows, { single = false, shape, many = false } = {}) {
   let sortSpec = null;
@@ -41,8 +89,7 @@ function query(getRows, { single = false, shape, many = false } = {}) {
   const run = () => {
     let rows = getRows().slice();
     if (sortSpec) {
-      const [[field, direction]] = Object.entries(sortSpec);
-      rows.sort((a, b) => (asNumber(a[field]) - asNumber(b[field])) * (direction < 0 ? -1 : 1));
+      sorted(rows, sortSpec);
     }
     rows = rows.slice(skipBy, skipBy + limitTo);
     if (single) return rows[0] ? (shape ? shape(rows[0]) : rows[0]) : null;
@@ -61,6 +108,8 @@ function query(getRows, { single = false, shape, many = false } = {}) {
 
 // Patches `Model` so it reads and writes `rows` (an array this function keeps in sync).
 function fakeModel(Model, rows, { uniqueOn } = {}) {
+  collections.set(Model.collection.name, rows);
+  test.mock.method(Model, 'aggregate', async pipeline => aggregate(rows.map(doc => doc.toObject()), pipeline));
   // Reads hand out copies, as a real database does: changing a copy (even a rejected change)
   // never touches the stored data until save() succeeds.
   const view = (doc) => {
