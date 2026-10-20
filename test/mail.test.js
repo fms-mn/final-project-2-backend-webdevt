@@ -23,7 +23,7 @@ const LoginAttempt = require('../models/LoginAttempt');
 const AuthToken = require('../models/AuthToken');
 const MovieReminder = require('../models/MovieReminder');
 const mail = require('../services/mail');
-const { sendDueReminders, sendDueReleaseReminders } = require('../services/mail/reminders');
+const { sendDueReminders, sendDueReleaseReminders, sweepReminders } = require('../services/mail/reminders');
 const templates = require('../services/mail/templates');
 const { manilaDay } = require('../utils/manila');
 const { fakeModel, fakeTransactions } = require('./fakeDb');
@@ -271,6 +271,63 @@ test('reminders go to confirmed customers a few hours before, once, and skip ver
   assert.deepEqual(mail.sent.map((message) => message.to), ['ann@example.com']);
   assert.match(mail.sent[0].subject, /^Reminder: Dune starts today at /);
   assert.equal((await sendDueReminders()).sent, 0, 'the same reminder is never sent twice');
+});
+
+const SECRET = 'a-cron-secret-of-enough-length';
+const sweepCall = (token) => fetch(`${base}/api/internal/sweep-reminders`, {
+  method: 'POST', headers: token === undefined ? {} : { Authorization: `Bearer ${token}` },
+}).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
+
+test('the scheduled sweep address does not exist without CRON_SECRET, and refuses a wrong or missing token', async () => {
+  const saved = process.env.CRON_SECRET;
+  try {
+    delete process.env.CRON_SECRET;
+    assert.equal((await sweepCall(SECRET)).status, 404, 'switched off until a secret is set');
+    process.env.CRON_SECRET = 'too-short';
+    assert.equal((await sweepCall('too-short')).status, 404, 'a short secret counts as not set');
+
+    process.env.CRON_SECRET = SECRET;
+    assert.equal((await sweepCall(undefined)).status, 401);
+    assert.equal((await sweepCall('wrong')).status, 401);
+    assert.equal((await sweepCall(SECRET.slice(0, -1))).status, 401);
+    assert.equal((await sweepCall(SECRET + 'x')).status, 401);
+  } finally {
+    if (saved === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = saved;
+  }
+});
+
+test('the scheduled sweep sends the due reminders once, however often it is called or overlaps', async () => {
+  const saved = process.env.CRON_SECRET;
+  process.env.CRON_SECRET = SECRET;
+  try {
+    const ann = await signIn('ann');
+    const show = addShow(addMovie({ title: 'Dune' }), addHall(), soon(2 * HOUR));
+    const held = await bookAndPay(ann, show, ['A1']);
+    bookings.find((booking) => booking.bookingCode === held.bookingCode).bookedAt = new Date(Date.now() - 5 * HOUR);
+    await mail.idle();
+    mail.sent.length = 0;
+
+    const [a, b] = await Promise.all([sweepCall(SECRET), sweepCall(SECRET)]);
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    assert.equal(a.data.showings.sent + b.data.showings.sent >= 1, true);
+    assert.equal(mail.sent.length, 1, 'two overlapping calls still send one email');
+    assert.match(mail.sent[0].subject, /^Reminder: Dune starts today at /);
+
+    const again = await sweepCall(SECRET);
+    assert.equal(again.data.showings.sent, 0);
+    assert.equal(mail.sent.length, 1, 'a later call sends nothing more');
+  } finally {
+    if (saved === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = saved;
+  }
+});
+
+test('a sweep that is already running is joined, not repeated', async () => {
+  const first = sweepReminders();
+  const second = sweepReminders();
+  assert.equal(first, second, 'the same sweep answers both callers');
+  await first;
+  assert.notEqual(sweepReminders(), first, 'a new sweep starts once the last one is done');
 });
 
 test('the words are escaped, and only web addresses become links or images', () => {

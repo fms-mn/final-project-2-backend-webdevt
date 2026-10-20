@@ -66,6 +66,8 @@ module.exports = {
   //   APP_URL         the public address of the website, for the buttons and the logo in emails.
   //   REMINDER_HOURS  how long before a showing the reminder email goes out (default 3).
   //   RELEASE_REMINDER_DAYS  how many days before a coming-soon movie opens its reminder email goes out (default 1).
+  //   CRON_SECRET     lets a scheduler call POST /api/internal/sweep-reminders (at least 16 characters).
+  //                   Without it that address does not exist. See docs/DEPLOY.md.
   // Account access (services/accountAccess.js). Read each time so a test can change them.
   //   RESET_MINUTES        how long a password reset link works (default 60)
   //   LOGIN_CODE_MINUTES   how long an emailed sign-in code works (default 10)
@@ -76,6 +78,10 @@ module.exports = {
   get verifyAfterDays() {
     const value = Number(process.env.VERIFY_AFTER_DAYS);
     return process.env.VERIFY_AFTER_DAYS !== undefined && Number.isFinite(value) && value >= 0 ? value : 30;
+  },
+  get cronSecret() {
+    const secret = (process.env.CRON_SECRET || '').trim();
+    return secret.length >= 16 ? secret : '';
   },
   get mail() {
     const env = process.env;

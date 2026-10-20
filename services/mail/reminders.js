@@ -58,4 +58,22 @@ async function sendDueReleaseReminders(now = new Date()) {
   return { sent, checked: due.length };
 }
 
-module.exports = { sendDueReminders, sendDueReleaseReminders };
+// One sweep of both kinds of reminder. The in-process timer (index.js) and the scheduled call to
+// POST /api/internal/sweep-reminders both come here; a call that arrives while a sweep is running
+// joins it instead of starting a second one, so nobody is emailed twice by overlapping sweeps.
+let running = null;
+function sweepReminders(now = new Date()) {
+  if (!running) {
+    running = (async () => {
+      const result = { showings: { sent: 0, checked: 0 }, releases: { sent: 0, checked: 0 } };
+      try { result.showings = await sendDueReminders(now); }
+      catch (error) { console.error('Sending reminders failed:', error.message); }
+      try { result.releases = await sendDueReleaseReminders(now); }
+      catch (error) { console.error('Sending coming-soon reminders failed:', error.message); }
+      return result;
+    })().finally(() => { running = null; });
+  }
+  return running;
+}
+
+module.exports = { sendDueReminders, sendDueReleaseReminders, sweepReminders };
