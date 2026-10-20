@@ -66,12 +66,13 @@ mongoose
       .catch((error) => console.error('Archiving quiet movies failed:', error.message));
     setTimeout(() => { sweepMovies(); setInterval(sweepMovies, 60 * 60 * 1000).unref(); }, 60 * 60 * 1000).unref();
     // Customers get one reminder email a few hours before their showing (see services/mail/reminders.js).
-    const { sendDueReminders, sendDueReleaseReminders } = require('./services/mail/reminders');
+    // The same sweep can also be started from outside (POST /api/internal/sweep-reminders), which is
+    // how reminders still go out when the host puts an idle server to sleep.
+    const { sweepReminders: runReminderSweep } = require('./services/mail/reminders');
     const sweepReminders = async () => {
-      try { const { sent } = await sendDueReminders(); if (sent) console.log(`Sent ${sent} showing reminder email(s)`); }
-      catch (error) { console.error('Sending reminders failed:', error.message); }
-      try { const { sent } = await sendDueReleaseReminders(); if (sent) console.log(`Sent ${sent} coming-soon reminder email(s)`); }
-      catch (error) { console.error('Sending coming-soon reminders failed:', error.message); }
+      const { showings, releases } = await runReminderSweep();
+      if (showings.sent) console.log(`Sent ${showings.sent} showing reminder email(s)`);
+      if (releases.sent) console.log(`Sent ${releases.sent} coming-soon reminder email(s)`);
     };
     setTimeout(() => { sweepReminders(); setInterval(sweepReminders, 10 * 60 * 1000).unref(); }, 60 * 1000).unref();
     setInterval(() => { expireHolds().catch((error) => console.error('Releasing holds failed:', error.message)); }, 30 * 1000).unref();

@@ -9,6 +9,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const movieRoutes = require('./routes/movies');
 const reminderRoutes = require('./routes/reminders');
+const internalRoutes = require('./routes/internal');
 const bookingRoutes = require('./routes/bookings');
 const paymentRoutes = require('./routes/payments');
 const adminMovieRoutes = require('./routes/adminMovies');
@@ -58,6 +59,7 @@ function createApp({ clientDist = config.clientDist } = {}) {
   app.use('/api/users', userRoutes);
   app.use('/api/movies', movieRoutes);
   app.use('/api/reminders', reminderRoutes);
+  app.use('/api/internal', internalRoutes);
   app.use('/api/admin/movies', adminMovieRoutes);
   app.use('/api/admin/showtimes', showtimeRoutes.adminRouter);
   app.use('/api/admin/stats', adminStatsRoutes);
