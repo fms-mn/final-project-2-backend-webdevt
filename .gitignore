@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.local
+.mail-outbox/
+.mail-preview/
+*.log
+.DS_Store

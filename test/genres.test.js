@@ -37,7 +37,12 @@ test('invalid genre writes fail before changing saved settings', async () => {
   assert.deepEqual(normalizeGenres(['  Local Cinema  ']), ['Local Cinema']);
 });
 
-test('server and client initial genre catalogs agree', async () => {
-  const { MOVIE_GENRES } = await import('../../client/src/utils/genres.js');
+// The website lives in its own repository now: this check only runs when its code sits next to this folder.
+const fs = require('node:fs');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const clientGenres = path.join(__dirname, '..', '..', 'client', 'src', 'utils', 'genres.js');
+test('server and client initial genre catalogs agree', { skip: !fs.existsSync(clientGenres) && 'the frontend is in a separate repository' }, async () => {
+  const { MOVIE_GENRES } = await import(pathToFileURL(clientGenres).href);
   assert.deepEqual(DEFAULTS.genres, MOVIE_GENRES);
 });
